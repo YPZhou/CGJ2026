@@ -57,6 +57,12 @@ public partial class MainGameController : Node2D
     private readonly Dictionary<HexCoord, RewardType> _rewards = new();
 
     private Texture2D _placeholder = null!;
+    private Texture2D _seaGridTexture = null!;
+    private Texture2D _reefTexture = null!;
+    private Texture2D _growthModuleTexture = null!;
+    private Texture2D _commandReloadTexture = null!;
+    private Texture2D _firepowerUpgradeTexture = null!;
+    private Texture2D _cardCalibrationTexture = null!;
     private HexGrid _grid = null!;
     private FleetState _fleet = null!;
     private HashSet<HexCoord> _reefCells = new();
@@ -118,6 +124,12 @@ public partial class MainGameController : Node2D
     public override void _Ready()
     {
         _placeholder = GD.Load<Texture2D>("res://icon.svg");
+        _seaGridTexture = GD.Load<Texture2D>("res://Art/SeaGrid.png");
+        _reefTexture = GD.Load<Texture2D>("res://Art/Rock.png");
+        _growthModuleTexture = GD.Load<Texture2D>("res://Art/BonusIncreaseBoat.png");
+        _commandReloadTexture = GD.Load<Texture2D>("res://Art/BonusRefreshInstruction.png");
+        _firepowerUpgradeTexture = GD.Load<Texture2D>("res://Art/BonusPowerUp.png");
+        _cardCalibrationTexture = GD.Load<Texture2D>("res://Art/BonusBoostInstruction.png");
         ResolveHudNodes();
         HookHudEvents();
 
@@ -2823,6 +2835,7 @@ public partial class MainGameController : Node2D
                 : Mathf.Max(0.9f, _hexSize * 0.04f);
 
             DrawColoredPolygon(points, fillColor);
+            DrawMarker(center, _hexSize * 1.92f, new Color(1.0f, 1.0f, 1.0f, 0.15f), 0.0f, _seaGridTexture);
             DrawHexOutline(points, outlineColor, outlineWidth);
         }
     }
@@ -2832,7 +2845,7 @@ public partial class MainGameController : Node2D
         foreach (var reef in _reefCells)
         {
             var center = GetCellCenter(reef);
-            DrawMarker(center, _hexSize * 1.15f, new Color(0.74f, 0.41f, 0.27f, 0.92f), 0.0f);
+            DrawMarker(center, _hexSize * 1.15f, Colors.White, 0.0f, _reefTexture);
         }
     }
 
@@ -2841,8 +2854,18 @@ public partial class MainGameController : Node2D
         foreach (var reward in _rewards)
         {
             var center = GetCellCenter(reward.Key);
-            DrawCircle(center, Mathf.Max(2.0f, _hexSize * 0.16f), new Color(0.18f, 0.12f, 0.05f, 0.36f));
-            DrawMarker(center, _hexSize * 0.58f, GetRewardColor(reward.Value), 0.0f);
+            var glowColor = GetRewardColor(reward.Value);
+            var rewardTexture = reward.Value switch
+            {
+                RewardType.GrowthModule => _growthModuleTexture,
+                RewardType.CommandReload => _commandReloadTexture,
+                RewardType.FirepowerUpgrade => _firepowerUpgradeTexture,
+                RewardType.CardCalibration => _cardCalibrationTexture,
+                _ => _growthModuleTexture,
+            };
+
+            DrawCircle(center, Mathf.Max(2.0f, _hexSize * 0.16f), new Color(glowColor.R, glowColor.G, glowColor.B, 0.36f));
+            DrawMarker(center, _hexSize * 0.58f, Colors.White, 0.0f, rewardTexture);
         }
     }
 
@@ -3207,11 +3230,11 @@ public partial class MainGameController : Node2D
         }
     }
 
-    private void DrawMarker(Vector2 center, float pixelSize, Color tint, float rotationRadians)
+    private void DrawMarker(Vector2 center, float pixelSize, Color tint, float rotationRadians, Texture2D? texture = null)
     {
         var size = new Vector2(pixelSize, pixelSize);
         DrawSetTransform(center, rotationRadians, Vector2.One);
-        DrawTextureRect(_placeholder, new Rect2(-size * 0.5f, size), false, tint);
+        DrawTextureRect(texture ?? _placeholder, new Rect2(-size * 0.5f, size), false, tint);
         DrawSetTransform(Vector2.Zero, 0.0f, Vector2.One);
     }
 
