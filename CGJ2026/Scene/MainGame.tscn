@@ -27,6 +27,9 @@ text = "Initializing map and fleet demo..."
 [node name="HintLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
 text = "Map + Fleet core demo"
 
+[node name="CombatLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
+text = "敌舰 0  敌弹 0  己弹 0"
+
 [node name="HudSpacer" type="Control" parent="HudLayer/HudMargin/HudVBox"]
 size_flags_vertical = 3
 
