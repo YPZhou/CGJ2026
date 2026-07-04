@@ -1,23 +1,23 @@
-[gd_scene load_steps=2 format=3 uid="uid://bgx6ntkglx61k"]
+[gd_scene format=3 uid="uid://bgx6ntkglx61k"]
 
-[ext_resource type="Script" path="res://Script/MainGameController.cs" id="1_7u6d5"]
+[ext_resource type="Script" uid="uid://d1fikslvwsutr" path="res://Script/MainGameController.cs" id="1_7u6d5"]
 
 [node name="Node2D" type="Node2D" unique_id=146032470]
 script = ExtResource("1_7u6d5")
 
-[node name="HudLayer" type="CanvasLayer" parent="."]
+[node name="HudLayer" type="CanvasLayer" parent="." unique_id=1060312436]
 
-[node name="HoverTooltip" type="PanelContainer" parent="HudLayer"]
+[node name="HoverTooltip" type="PanelContainer" parent="HudLayer" unique_id=1217937109]
 visible = false
+z_index = 10
 offset_right = 12.0
 offset_bottom = 12.0
 mouse_filter = 2
-z_index = 10
 
-[node name="HoverTooltipLabel" type="Label" parent="HudLayer/HoverTooltip"]
-text = ""
+[node name="HoverTooltipLabel" type="Label" parent="HudLayer/HoverTooltip" unique_id=1052252659]
+layout_mode = 2
 
-[node name="HudMargin" type="MarginContainer" parent="HudLayer"]
+[node name="HudMargin" type="MarginContainer" parent="HudLayer" unique_id=161857944]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -28,58 +28,69 @@ offset_bottom = -16.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="HudVBox" type="VBoxContainer" parent="HudLayer/HudMargin"]
+[node name="HudVBox" type="VBoxContainer" parent="HudLayer/HudMargin" unique_id=449055617]
+layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="StatusLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
+[node name="StatusLabel" type="Label" parent="HudLayer/HudMargin/HudVBox" unique_id=961339991]
+layout_mode = 2
 text = "Initializing map and fleet demo..."
 
-[node name="HintLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
+[node name="HintLabel" type="Label" parent="HudLayer/HudMargin/HudVBox" unique_id=1692482996]
+layout_mode = 2
 text = "Map + Fleet core demo"
 
-[node name="CombatLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
+[node name="CombatLabel" type="Label" parent="HudLayer/HudMargin/HudVBox" unique_id=1951003707]
+layout_mode = 2
 text = "敌舰 0  敌弹 0  己弹 0"
 
-[node name="RewardLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
+[node name="RewardLabel" type="Label" parent="HudLayer/HudMargin/HudVBox" unique_id=391127671]
+layout_mode = 2
 text = "奖励 0/3  池 +0/0/0"
 
-[node name="HudSpacer" type="Control" parent="HudLayer/HudMargin/HudVBox"]
+[node name="HudSpacer" type="Control" parent="HudLayer/HudMargin/HudVBox" unique_id=1555801485]
+layout_mode = 2
 size_flags_vertical = 3
 
-[node name="CardsRow" type="HBoxContainer" parent="HudLayer/HudMargin/HudVBox"]
-theme_override_constants/separation = 12
+[node name="CardsRow" type="HBoxContainer" parent="HudLayer/HudMargin/HudVBox" unique_id=2010507789]
+layout_mode = 2
 size_flags_horizontal = 3
+theme_override_constants/separation = 12
 
-[node name="CardButton0" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow"]
+[node name="CardButton0" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow" unique_id=418514174]
 custom_minimum_size = Vector2(220, 84)
+layout_mode = 2
 size_flags_horizontal = 3
 text = "Card 1"
 
-[node name="CardButton1" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow"]
+[node name="CardButton1" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow" unique_id=1304940287]
 custom_minimum_size = Vector2(220, 84)
+layout_mode = 2
 size_flags_horizontal = 3
 text = "Card 2"
 
-[node name="CardButton2" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow"]
+[node name="CardButton2" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow" unique_id=331973060]
 custom_minimum_size = Vector2(220, 84)
+layout_mode = 2
 size_flags_horizontal = 3
 text = "Card 3"
 
-[node name="ConfirmButton" type="Button" parent="HudLayer/HudMargin/HudVBox"]
+[node name="ConfirmButton" type="Button" parent="HudLayer/HudMargin/HudVBox" unique_id=825320895]
 custom_minimum_size = Vector2(220, 52)
+layout_mode = 2
 text = "确认移动"
 
-[node name="GameOverOverlay" type="ColorRect" parent="HudLayer"]
+[node name="GameOverOverlay" type="ColorRect" parent="HudLayer" unique_id=775715130]
 visible = false
+z_index = 20
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-color = Color(0, 0, 0, 0.75)
 mouse_filter = 1
-z_index = 20
+color = Color(0, 0, 0, 0.75)
 
-[node name="GameOverPanel" type="PanelContainer" parent="HudLayer/GameOverOverlay"]
-anchors_preset = 8
+[node name="GameOverPanel" type="PanelContainer" parent="HudLayer/GameOverOverlay" unique_id=549281891]
+layout_mode = 0
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
@@ -91,22 +102,24 @@ offset_bottom = 140.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="GameOverVBox" type="VBoxContainer" parent="HudLayer/GameOverOverlay/GameOverPanel"]
+[node name="GameOverVBox" type="VBoxContainer" parent="HudLayer/GameOverOverlay/GameOverPanel" unique_id=977923693]
+layout_mode = 2
 theme_override_constants/separation = 16
 
-[node name="GameOverTitleLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox"]
-text = ""
+[node name="GameOverTitleLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox" unique_id=962750091]
+layout_mode = 2
 horizontal_alignment = 1
 
-[node name="GameOverReasonLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox"]
-text = ""
+[node name="GameOverReasonLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox" unique_id=1369204156]
+layout_mode = 2
 horizontal_alignment = 1
 
-[node name="GameOverStatsLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox"]
-text = ""
+[node name="GameOverStatsLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox" unique_id=529411751]
+layout_mode = 2
 horizontal_alignment = 1
 
-[node name="GameOverRestartButton" type="Button" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox"]
+[node name="GameOverRestartButton" type="Button" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox" unique_id=1372519752]
 custom_minimum_size = Vector2(180, 52)
+layout_mode = 2
 size_flags_horizontal = 4
 text = "重新开始"

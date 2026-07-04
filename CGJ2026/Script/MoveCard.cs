@@ -26,20 +26,20 @@ public sealed class MoveCard
 
     public static readonly SubPoolEntry[] StraightPool =
     {
-        new("直航", 3, 2, 0),
-        new("紧急加速", 1, 3, 0),
+        new("直航", 3, 1, 0),
+        new("紧急加速", 1, 1, 0),
     };
 
     public static readonly SubPoolEntry[] LeftPool =
     {
-        new("左满舵", 4, 2, -1),
-        new("左漂移", 1, 3, -1),
+        new("左满舵", 4, 1, -1),
+        new("左漂移", 1, 1, -1),
     };
 
     public static readonly SubPoolEntry[] RightPool =
     {
-        new("右满舵", 4, 2, +1),
-        new("右漂移", 1, 3, +1),
+        new("右满舵", 4, 1, +1),
+        new("右漂移", 1, 1, +1),
     };
 
     public string Name { get; init; } = string.Empty;
@@ -62,11 +62,11 @@ public sealed class MoveCard
         {
             if (TurnDelta == 0)
             {
-                return $"移动 {TotalMove}";
+                return "获得 3 秒加速";
             }
 
             var turnText = TurnDelta > 0 ? "右转" : "左转";
-            return $"{turnText}后移动 {TotalMove}";
+            return $"{turnText}并获得 3 秒加速";
         }
     }
 

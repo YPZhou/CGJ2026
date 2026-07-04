@@ -17,6 +17,16 @@ public partial class MainGameController : Node2D
     private const int MaximumRange = 6;
     private const int MaximumCardMoveBonus = 2;
     private const int ProjectileStepsPerPhase = 6;
+    private const float PlayerMoveIntervalSeconds = 1.0f;
+    private const float PlayerBoostMoveIntervalSeconds = 0.75f;
+    private const float EnemyMoveIntervalSeconds = 1.5f;
+    private const float PlayerProjectileIntervalSeconds = 0.2f;
+    private const float EnemyProjectileIntervalSeconds = 0.5f;
+    private const float PlayerFireIntervalSeconds = 0.8f;
+    private const float ArtilleryFireIntervalSeconds = 1.0f;
+    private const float MineFireIntervalSeconds = 1.5f;
+    private const float WaveTickIntervalSeconds = 5.0f;
+    private const float PlayerBoostDurationSeconds = 3.0f;
     private const float BaseViewportWidth = 1280.0f;
     private const float BaseViewportHeight = 720.0f;
     private const float BoardMargin = 36.0f;
@@ -69,8 +79,10 @@ public partial class MainGameController : Node2D
     private SimulationResult? _preview;
     private MoveCard? _selectedCard;
     private int _selectedCardIndex = -1;
+    private int _pendingCardSelectionIndex = -1;
     private bool _isGameOver;
     private bool _isVictory;
+    private bool _isPreviewPaused;
     private string _gameOverReason = string.Empty;
     private string _lastCombatEvent = string.Empty;
     private string _lastRewardEvent = string.Empty;
@@ -83,6 +95,15 @@ public partial class MainGameController : Node2D
     private Vector2 _baseBoundsMin;
     private Vector2 _baseBoundsMax;
     private float _uiScale = 1.0f;
+    private float _playerMoveElapsed;
+    private float _enemyMoveElapsed;
+    private float _playerProjectileElapsed;
+    private float _enemyProjectileElapsed;
+    private float _playerFireElapsed;
+    private float _artilleryFireElapsed;
+    private float _mineFireElapsed;
+    private float _waveTickElapsed;
+    private float _playerBoostRemainingSeconds;
 
     private MarginContainer _hudMargin = null!;
     private VBoxContainer _hudVBox = null!;
@@ -119,6 +140,7 @@ public partial class MainGameController : Node2D
     private bool _inputLocked;
     private PendingTurnState? _activeTurn;
     private Action? _afterAnimationBatch;
+    private int _animationBatchSequence;
     private bool _skipRemainingTurnAnimations;
 
     public override void _Ready()
@@ -177,6 +199,12 @@ public partial class MainGameController : Node2D
         if (_isGameOver)
         {
             return;
+        }
+
+        if (!_isPreviewPaused)
+        {
+            AccumulateRealtime((float)delta);
+            TryRunNextRealtimeAction();
         }
 
         UpdateHoverTooltip(GetLocalMousePosition(), GetViewport().GetMousePosition());
@@ -275,8 +303,19 @@ public partial class MainGameController : Node2D
         _activeTurn = null;
         _afterAnimationBatch = null;
         _skipRemainingTurnAnimations = false;
+        _isPreviewPaused = false;
+        _pendingCardSelectionIndex = -1;
         _pendingPlayerProjectiles.Clear();
         _pendingEnemyProjectiles.Clear();
+        _playerMoveElapsed = 0.0f;
+        _enemyMoveElapsed = 0.0f;
+        _playerProjectileElapsed = 0.0f;
+        _enemyProjectileElapsed = 0.0f;
+        _playerFireElapsed = 0.0f;
+        _artilleryFireElapsed = 0.0f;
+        _mineFireElapsed = 0.0f;
+        _waveTickElapsed = 0.0f;
+        _playerBoostRemainingSeconds = 0.0f;
 
         _gameOverOverlay.Visible = false;
 
@@ -573,14 +612,39 @@ public partial class MainGameController : Node2D
 
     private void SelectCard(int index)
     {
-        if (_isGameOver || _inputLocked || index < 0 || index >= _hand.Count)
+        if (_isGameOver || index < 0 || index >= _hand.Count)
         {
+            return;
+        }
+
+        if (_inputLocked)
+        {
+            _pendingCardSelectionIndex = index;
+            return;
+        }
+
+        ApplyCardSelection(index);
+    }
+
+    private void ApplyCardSelection(int index)
+    {
+        if (_isGameOver || index < 0 || index >= _hand.Count)
+        {
+            return;
+        }
+
+        if (_selectedCardIndex == index)
+        {
+            ClearSelection();
+            UpdateHudState();
+            QueueRedraw();
             return;
         }
 
         _selectedCardIndex = index;
         _selectedCard = _hand[index];
         _preview = ResolveCardMovement(_fleet, _selectedCard, previewOnly: true);
+        _isPreviewPaused = true;
 
         UpdateHudState();
         QueueRedraw();
@@ -595,17 +659,134 @@ public partial class MainGameController : Node2D
 
         var activeCard = _hand[_selectedCardIndex];
         _hand.RemoveAt(_selectedCardIndex);
-        ClearSelection();
 
-        _activeTurn = new PendingTurnState
+        if (activeCard.TurnDelta != 0)
         {
-            Card = activeCard,
-            RemainingPlayerSteps = activeCard.TotalMove,
-        };
-        _skipRemainingTurnAnimations = false;
-        _afterAnimationBatch = null;
+            _fleet.HeadDirection = _grid.RotateDirection(_fleet.HeadDirection, activeCard.TurnDelta);
+        }
 
-        BeginProjectilePhase();
+        ApplyPlayerSpeedBoost();
+        _lastRewardEvent = $"已执行 {activeCard.Name}，获得 3 秒加速。";
+
+        if (_hand.Count == 0)
+        {
+            FillHand();
+        }
+
+        ClearSelection();
+        RefreshEnemyIntents();
+        UpdateHudState();
+        QueueRedraw();
+    }
+
+    private float CurrentPlayerMoveIntervalSeconds => _playerBoostRemainingSeconds > 0.0f
+        ? PlayerBoostMoveIntervalSeconds
+        : PlayerMoveIntervalSeconds;
+
+    private void ApplyPlayerSpeedBoost()
+    {
+        _playerBoostRemainingSeconds = PlayerBoostDurationSeconds;
+    }
+
+    private void AccumulateRealtime(float deltaSeconds)
+    {
+        if (_playerBoostRemainingSeconds > 0.0f)
+        {
+            _playerBoostRemainingSeconds = Mathf.Max(0.0f, _playerBoostRemainingSeconds - deltaSeconds);
+        }
+
+        _playerMoveElapsed += deltaSeconds;
+        _enemyMoveElapsed += deltaSeconds;
+        _playerProjectileElapsed += deltaSeconds;
+        _enemyProjectileElapsed += deltaSeconds;
+        _playerFireElapsed += deltaSeconds;
+        _artilleryFireElapsed += deltaSeconds;
+        _mineFireElapsed += deltaSeconds;
+        _waveTickElapsed += deltaSeconds;
+    }
+
+    private void TryRunNextRealtimeAction()
+    {
+        while (!_inputLocked && !_isPreviewPaused && !_isGameOver)
+        {
+            if (_playerProjectileElapsed >= PlayerProjectileIntervalSeconds)
+            {
+                _playerProjectileElapsed -= PlayerProjectileIntervalSeconds;
+                if (AdvanceRealtimeProjectileStep(ProjectileOwner.Player))
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_enemyProjectileElapsed >= EnemyProjectileIntervalSeconds)
+            {
+                _enemyProjectileElapsed -= EnemyProjectileIntervalSeconds;
+                if (AdvanceRealtimeProjectileStep(ProjectileOwner.Enemy))
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_playerMoveElapsed >= CurrentPlayerMoveIntervalSeconds)
+            {
+                _playerMoveElapsed -= CurrentPlayerMoveIntervalSeconds;
+                AdvanceRealtimePlayerMovement();
+                return;
+            }
+
+            if (_enemyMoveElapsed >= EnemyMoveIntervalSeconds)
+            {
+                _enemyMoveElapsed -= EnemyMoveIntervalSeconds;
+                if (AdvanceRealtimeEnemyMovement())
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_playerFireElapsed >= PlayerFireIntervalSeconds)
+            {
+                _playerFireElapsed -= PlayerFireIntervalSeconds;
+                FireRealtimePlayerVolley();
+                return;
+            }
+
+            if (_artilleryFireElapsed >= ArtilleryFireIntervalSeconds)
+            {
+                _artilleryFireElapsed -= ArtilleryFireIntervalSeconds;
+                if (FireRealtimeArtilleryVolley())
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_mineFireElapsed >= MineFireIntervalSeconds)
+            {
+                _mineFireElapsed -= MineFireIntervalSeconds;
+                if (FireRealtimeMineVolley())
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_waveTickElapsed >= WaveTickIntervalSeconds)
+            {
+                _waveTickElapsed -= WaveTickIntervalSeconds;
+                AdvanceRealtimeWaveTick();
+                continue;
+            }
+
+            return;
+        }
     }
 
     private void BeginProjectilePhase()
@@ -616,6 +797,484 @@ public partial class MainGameController : Node2D
         }
 
         ContinueProjectilePhase();
+    }
+
+    private void AdvanceRealtimePlayerMovement()
+    {
+        var step = BuildRealtimePlayerMovementStep();
+        PlayAnimationBatch(new List<AnimationEvent> { step.MoveAnimation }, () => CommitRealtimePlayerMovementStep(step));
+    }
+
+    private PlayerMovementStep BuildRealtimePlayerMovementStep()
+    {
+        var stagedFleet = _fleet.Clone();
+        var advance = ResolvePlayerAdvance(stagedFleet);
+        stagedFleet.HeadDirection = advance.Direction;
+        var collision = CheckHeadEntry(advance.Coord, _fleet);
+        var pickupRewardType = collision == CollisionKind.None && _rewards.TryGetValue(advance.Coord, out var rewardType)
+            ? rewardType
+            : (RewardType?)null;
+        var moveAnimation = BuildFleetStepAnimation(stagedFleet, advance.Coord);
+
+        stagedFleet.MoveOneStep(advance.Coord, _grid);
+        if (collision == CollisionKind.None && stagedFleet.HasDuplicateCoords())
+        {
+            collision = CollisionKind.Self;
+        }
+
+        return new PlayerMovementStep(stagedFleet, advance.Coord, collision, pickupRewardType, moveAnimation);
+    }
+
+    private void CommitRealtimePlayerMovementStep(PlayerMovementStep step)
+    {
+        _fleet = step.Fleet;
+
+        if (step.CollisionKind != CollisionKind.None)
+        {
+            _isGameOver = true;
+            _isVictory = false;
+            _gameOverReason = DescribeCollision(step.CollisionKind);
+            _lastCombatEvent = "舰队在自动航行中沉没。";
+            return;
+        }
+
+        if (step.PickupRewardType.HasValue)
+        {
+            var rewardEvents = new List<string>();
+            _rewards.Remove(step.NextHead);
+            ApplyRewardPickup(_fleet, step.PickupRewardType.Value, previewOnly: false, rewardEvents, _rewards);
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
+        }
+
+        CheckRealtimeVictory();
+        RefreshEnemyIntents();
+    }
+
+    private bool AdvanceRealtimeEnemyMovement()
+    {
+        var batch = BuildEnemyMovementStepBatch(0);
+        if (batch.Moves.Count == 0)
+        {
+            return false;
+        }
+
+        PlayAnimationBatch(batch.Animations, () => CommitRealtimeEnemyMovementStep(batch));
+        return true;
+    }
+
+    private void CommitRealtimeEnemyMovementStep(EnemyMovementStepBatch batch)
+    {
+        foreach (var move in batch.Moves)
+        {
+            move.Enemy.Coord = move.NextCoord;
+        }
+
+        foreach (var move in batch.Moves)
+        {
+            if (!_fleet.Occupies(move.NextCoord))
+            {
+                continue;
+            }
+
+            _isGameOver = true;
+            _isVictory = false;
+            _gameOverReason = "被敌舰撞击";
+            _lastCombatEvent = $"{DescribeEnemyType(move.Enemy.Type)}直接撞入舰队。";
+            break;
+        }
+
+        if (!_isGameOver)
+        {
+            _lastCombatEvent = BuildEnemyMovementSummary(batch.Moves.Count);
+        }
+
+        RefreshEnemyIntents();
+    }
+
+    private void FireRealtimePlayerVolley()
+    {
+        var rewardEvents = new List<string>();
+        var animations = new List<AnimationEvent>();
+        _lastCombatEvent = ResolvePlayerFire(rewardEvents, animations);
+        if (rewardEvents.Count > 0)
+        {
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
+        }
+
+        PlayAnimationBatch(animations, RefreshEnemyIntents);
+    }
+
+    private bool FireRealtimeArtilleryVolley()
+    {
+        var animations = new List<AnimationEvent>();
+        var anyEnemy = false;
+        var spawnedProjectiles = 0;
+
+        foreach (var enemy in _enemies)
+        {
+            if (!enemy.IsAlive || enemy.Type != EnemyType.Artillery)
+            {
+                continue;
+            }
+
+            anyEnemy = true;
+            var attackDirection = GetDirectionToward(enemy.Coord, GetPredictedPlayerCoord());
+            animations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.CannonFire,
+                Duration = 0.3f,
+                FireBatchGroup = EnemyFireBatchGroup,
+                WorldPosition = GetCellCenter(enemy.Coord),
+                Radius = _hexSize * 0.48f,
+                Tint = new Color(0.94f, 0.46f, 0.22f, 0.92f),
+                Direction = attackDirection,
+                FireDirections = new List<int> { attackDirection },
+                CannonEntityKey = enemy,
+            });
+
+            if (TrySpawnEnemyProjectile(enemy.Coord, attackDirection, out var hitFleet))
+            {
+                spawnedProjectiles++;
+            }
+
+            if (hitFleet)
+            {
+                _isGameOver = true;
+                _isVictory = false;
+                _gameOverReason = "被敌方炮火击中";
+                _lastCombatEvent = "炮击哨近距开火命中舰队。";
+                PlayAnimationBatch(animations, RefreshEnemyIntents);
+                return true;
+            }
+        }
+
+        if (!anyEnemy)
+        {
+            return false;
+        }
+
+        _lastCombatEvent = spawnedProjectiles == 0
+            ? "炮击哨完成射击，但火线被地形或占位阻断。"
+            : $"炮击哨发射 {spawnedProjectiles} 枚炮弹。";
+        PlayAnimationBatch(animations, RefreshEnemyIntents);
+        return true;
+    }
+
+    private bool FireRealtimeMineVolley()
+    {
+        var animations = new List<AnimationEvent>();
+        var firingMines = 0;
+        var spawnedProjectiles = 0;
+
+        foreach (var enemy in _enemies)
+        {
+            if (!enemy.IsAlive || enemy.Type != EnemyType.Mine)
+            {
+                continue;
+            }
+
+            firingMines++;
+            animations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.CannonFire,
+                Duration = 0.2f,
+                FireBatchGroup = EnemyFireBatchGroup,
+                WorldPosition = GetCellCenter(enemy.Coord),
+                Radius = _hexSize * 0.38f,
+                Tint = new Color(0.85f, 0.84f, 0.82f, 0.92f),
+                Direction = 0,
+                FireDirections = new List<int> { 0, 1, 2, 3, 4, 5 },
+                CannonEntityKey = enemy,
+            });
+
+            for (var direction = 0; direction < HexCoord.Directions.Length; direction++)
+            {
+                if (TrySpawnEnemyProjectile(enemy.Coord, direction, out var hitFleet))
+                {
+                    spawnedProjectiles++;
+                }
+
+                if (!hitFleet)
+                {
+                    continue;
+                }
+
+                _isGameOver = true;
+                _isVictory = false;
+                _gameOverReason = "被敌方炮火击中";
+                _lastCombatEvent = "断脊水雷齐射命中舰队。";
+                PlayAnimationBatch(animations, RefreshEnemyIntents);
+                return true;
+            }
+        }
+
+        if (firingMines == 0)
+        {
+            return false;
+        }
+
+        _lastCombatEvent = spawnedProjectiles == 0
+            ? "断脊水雷齐射受阻，未形成有效火线。"
+            : $"断脊水雷发射 {spawnedProjectiles} 枚炮弹。";
+        PlayAnimationBatch(animations, RefreshEnemyIntents);
+        return true;
+    }
+
+    private void AdvanceRealtimeWaveTick()
+    {
+        _turnCounter++;
+        var rewardEvents = new List<string>();
+        SpawnScheduledEnemiesForTurn(_turnCounter);
+        if (TryAutoSpawnRewardForTurn(_turnCounter, rewardEvents))
+        {
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
+        }
+
+        RefreshEnemyIntents();
+    }
+
+    private bool AdvanceRealtimeProjectileStep(ProjectileOwner owner)
+    {
+        var step = BuildRealtimeProjectileStep(owner);
+        if (step == null)
+        {
+            return false;
+        }
+
+        PlayAnimationBatch(step.MoveAnimations, () => CommitRealtimeProjectileStep(step));
+        return true;
+    }
+
+    private ProjectileStepBatch? BuildRealtimeProjectileStep(ProjectileOwner owner)
+    {
+        var movingProjectiles = owner == ProjectileOwner.Player ? _playerProjectiles : _enemyProjectiles;
+        var opposingProjectiles = owner == ProjectileOwner.Player ? _enemyProjectiles : _playerProjectiles;
+        if (movingProjectiles.Count == 0)
+        {
+            return null;
+        }
+
+        var moves = new List<ProjectileAdvance>();
+        var expiredProjectiles = new List<ProjectileState>();
+        var resolvedProjectiles = new List<ProjectileState>();
+        var pendingEnemyDamage = new Dictionary<EnemyState, int>();
+        var movedProjectiles = new Dictionary<HexCoord, List<ProjectileAdvance>>();
+
+        foreach (var projectile in movingProjectiles)
+        {
+            if (!TryGetProjectileAdvance(projectile, out var nextCoord))
+            {
+                expiredProjectiles.Add(projectile);
+                continue;
+            }
+
+            var advance = new ProjectileAdvance(projectile, nextCoord);
+            moves.Add(advance);
+
+            if (!movedProjectiles.TryGetValue(nextCoord, out var bucket))
+            {
+                bucket = new List<ProjectileAdvance>();
+                movedProjectiles.Add(nextCoord, bucket);
+            }
+
+            bucket.Add(advance);
+        }
+
+        if (moves.Count == 0 && expiredProjectiles.Count == 0)
+        {
+            return null;
+        }
+
+        var moveAnimations = new List<AnimationEvent>();
+        if (moves.Count > 0)
+        {
+            var entityMoves = new List<EntityMove>(moves.Count);
+            foreach (var move in moves)
+            {
+                var isPlayerProjectile = move.Projectile.Owner == ProjectileOwner.Player;
+                entityMoves.Add(new EntityMove
+                {
+                    EntityKey = move.Projectile,
+                    FromWorld = GetCellCenter(move.Projectile.Coord),
+                    ToWorld = GetCellCenter(move.NextCoord),
+                    Scale = isPlayerProjectile ? 0.42f : 0.46f,
+                    Tint = isPlayerProjectile
+                        ? new Color(0.98f, 0.86f, 0.32f, 0.95f)
+                        : new Color(0.94f, 0.46f, 0.22f, 0.95f),
+                });
+            }
+
+            moveAnimations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.ProjectileMove,
+                Duration = owner == ProjectileOwner.Player ? 0.12f : 0.18f,
+                EntityMoves = entityMoves,
+            });
+        }
+
+        var impactAnimations = new List<AnimationEvent>();
+        var playerHits = 0;
+        var projectileDuels = 0;
+        var fleetHit = false;
+
+        foreach (var pair in movedProjectiles)
+        {
+            var cell = pair.Key;
+            var advances = pair.Value;
+            var opposingAtCell = new List<ProjectileState>();
+            foreach (var projectile in opposingProjectiles)
+            {
+                if (projectile.Coord.Equals(cell))
+                {
+                    opposingAtCell.Add(projectile);
+                }
+            }
+
+            if (opposingAtCell.Count > 0)
+            {
+                projectileDuels++;
+                resolvedProjectiles.AddRange(opposingAtCell);
+                foreach (var move in advances)
+                {
+                    resolvedProjectiles.Add(move.Projectile);
+                }
+
+                impactAnimations.Add(new AnimationEvent
+                {
+                    Kind = AnimKind.Flash,
+                    Duration = 0.3f,
+                    WorldPosition = GetCellCenter(cell),
+                    Radius = _hexSize * 0.36f,
+                    Tint = new Color(1.0f, 1.0f, 0.9f, 0.92f),
+                });
+                continue;
+            }
+
+            if (owner == ProjectileOwner.Player)
+            {
+                var enemy = FindEnemyAt(cell);
+                if (enemy == null)
+                {
+                    continue;
+                }
+
+                foreach (var move in advances)
+                {
+                    AccumulatePendingEnemyDamage(enemy, move.Projectile.Damage, move.Projectile.HasExplosive, pendingEnemyDamage);
+                    resolvedProjectiles.Add(move.Projectile);
+                    playerHits++;
+                }
+
+                impactAnimations.Add(new AnimationEvent
+                {
+                    Kind = AnimKind.Explosion,
+                    Duration = 0.4f,
+                    WorldPosition = GetCellCenter(cell),
+                    Radius = _hexSize * 1.1f,
+                });
+                continue;
+            }
+
+            if (!_fleet.Occupies(cell))
+            {
+                continue;
+            }
+
+            foreach (var move in advances)
+            {
+                resolvedProjectiles.Add(move.Projectile);
+            }
+
+            impactAnimations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.Explosion,
+                Duration = 0.45f,
+                WorldPosition = GetCellCenter(cell),
+                Radius = _hexSize * 1.3f,
+            });
+
+            fleetHit = true;
+        }
+
+        foreach (var item in pendingEnemyDamage)
+        {
+            if (item.Key.Health - item.Value > 0)
+            {
+                continue;
+            }
+
+            impactAnimations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.Explosion,
+                Duration = 0.5f,
+                WorldPosition = GetCellCenter(item.Key.Coord),
+                Radius = _hexSize * 1.1f,
+            });
+        }
+
+        return new ProjectileStepBatch(
+            moves,
+            expiredProjectiles,
+            resolvedProjectiles,
+            pendingEnemyDamage,
+            moveAnimations,
+            impactAnimations,
+            expiredProjectiles.Count,
+            playerHits,
+            projectileDuels,
+            fleetHit);
+    }
+
+    private void CommitRealtimeProjectileStep(ProjectileStepBatch step)
+    {
+        CommitProjectileStepMove(step);
+
+        foreach (var item in step.PendingEnemyDamage)
+        {
+            item.Key.Health -= item.Value;
+        }
+
+        var rewardEvents = new List<string>();
+        var defeatedEnemies = ResolveDefeatedEnemies(rewardEvents);
+        foreach (var projectile in step.ResolvedProjectiles)
+        {
+            RemoveProjectile(projectile);
+        }
+
+        if (step.FleetHit)
+        {
+            _isGameOver = true;
+            _isVictory = false;
+            _gameOverReason = "被敌方炮火击中";
+        }
+
+        if (rewardEvents.Count > 0)
+        {
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
+        }
+
+        if (step.PlayerHitCount > 0 || step.ProjectileDuelCount > 0 || step.ExpiredCount > 0 || defeatedEnemies > 0)
+        {
+            var destroyedText = defeatedEnemies > 0 ? $" 击沉 {defeatedEnemies} 艘敌舰。" : string.Empty;
+            _lastCombatEvent = step.FleetHit
+                ? "敌方炮弹命中舰队。"
+                : $"炮弹推进：命中 {step.PlayerHitCount}，对撞 {step.ProjectileDuelCount}，消散 {step.ExpiredCount}。{destroyedText}";
+        }
+
+        RefreshEnemyIntents();
+        CheckRealtimeVictory();
+    }
+
+    private void CheckRealtimeVictory()
+    {
+        if (_fleet.Segments.Count < FleetLengthGoal)
+        {
+            return;
+        }
+
+        _isGameOver = true;
+        _isVictory = true;
+        _gameOverReason = "舰队扩编完成";
     }
 
     private void ContinueProjectilePhase()
@@ -685,20 +1344,21 @@ public partial class MainGameController : Node2D
             stagedFleet.HeadDirection = _grid.RotateDirection(stagedFleet.HeadDirection, turn.Card.TurnDelta);
         }
 
-        var nextHead = stagedFleet.Head.Step(stagedFleet.HeadDirection);
-        var collision = CheckHeadEntry(nextHead, _fleet);
-        var pickupRewardType = collision == CollisionKind.None && _rewards.TryGetValue(nextHead, out var rewardType)
+        var advance = ResolvePlayerAdvance(stagedFleet);
+        stagedFleet.HeadDirection = advance.Direction;
+        var collision = CheckHeadEntry(advance.Coord, _fleet);
+        var pickupRewardType = collision == CollisionKind.None && _rewards.TryGetValue(advance.Coord, out var rewardType)
             ? rewardType
             : (RewardType?)null;
-        var moveAnimation = BuildFleetStepAnimation(stagedFleet, nextHead);
+        var moveAnimation = BuildFleetStepAnimation(stagedFleet, advance.Coord);
 
-        stagedFleet.MoveOneStep(nextHead, _grid);
+        stagedFleet.MoveOneStep(advance.Coord, _grid);
         if (collision == CollisionKind.None && stagedFleet.HasDuplicateCoords())
         {
             collision = CollisionKind.Self;
         }
 
-        return new PlayerMovementStep(stagedFleet, nextHead, collision, pickupRewardType, moveAnimation);
+        return new PlayerMovementStep(stagedFleet, advance.Coord, collision, pickupRewardType, moveAnimation);
     }
 
     private void CommitPlayerMovementStep(PlayerMovementStep step)
@@ -843,6 +1503,7 @@ public partial class MainGameController : Node2D
 
     private void PlayAnimationBatch(List<AnimationEvent> animEvents, Action onComplete)
     {
+        _animationBatchSequence++;
         _afterAnimationBatch = onComplete;
 
         if (_skipRemainingTurnAnimations || animEvents.Count == 0)
@@ -935,16 +1596,26 @@ public partial class MainGameController : Node2D
     {
         if (_afterAnimationBatch is { } next)
         {
+            var completedSequence = _animationBatchSequence;
             _afterAnimationBatch = null;
             next();
+
+            if (completedSequence != _animationBatchSequence || !_inputLocked)
+            {
+                return;
+            }
+
+            FinalizeAnimationBatchCompletion();
             return;
         }
 
+        FinalizeAnimationBatchCompletion();
+    }
+
+    private void FinalizeAnimationBatchCompletion()
+    {
         ActivatePendingProjectiles();
-        _skipRemainingTurnAnimations = false;
-        _inputLocked = false;
-        UpdateHudState();
-        QueueRedraw();
+        UnlockInputAndFlushBufferedSelection();
     }
 
     private void FinishActiveTurn(bool completeTurn)
@@ -963,10 +1634,7 @@ public partial class MainGameController : Node2D
         _activeTurn = null;
         _afterAnimationBatch = null;
         ActivatePendingProjectiles();
-        _skipRemainingTurnAnimations = false;
-        _inputLocked = false;
-        UpdateHudState();
-        QueueRedraw();
+        UnlockInputAndFlushBufferedSelection();
     }
 
     private void ActivatePendingProjectiles()
@@ -1077,7 +1745,7 @@ public partial class MainGameController : Node2D
                     enemy.AttackIntentDirection = GetDirectionToward(originAfterMove, GetPredictedPlayerCoord());
                     break;
                 case EnemyType.Mine:
-                    enemy.HasRadialAttackIntent = ShouldMineFireThisTurn(enemy);
+                    enemy.HasRadialAttackIntent = true;
                     break;
             }
         }
@@ -1085,7 +1753,12 @@ public partial class MainGameController : Node2D
 
     private HexCoord GetPredictedPlayerCoord()
     {
-        return _fleet.Head.Step(_fleet.HeadDirection);
+        return ResolvePlayerAdvance(_fleet).Coord;
+    }
+
+    private (HexCoord Coord, int Direction) ResolvePlayerAdvance(FleetState fleet)
+    {
+        return _grid.ResolvePlayerBorderStep(fleet.Head, fleet.HeadDirection);
     }
 
     private SimulationResult ResolveCardMovement(FleetState source, MoveCard card, bool previewOnly, List<AnimationEvent>? animEvents = null)
@@ -1104,19 +1777,20 @@ public partial class MainGameController : Node2D
                 simulated.HeadDirection = _grid.RotateDirection(simulated.HeadDirection, card.TurnDelta);
             }
 
-            var nextHead = simulated.Head.Step(simulated.HeadDirection);
-            headPath.Add(nextHead);
+            var advance = ResolvePlayerAdvance(simulated);
+            simulated.HeadDirection = advance.Direction;
+            headPath.Add(advance.Coord);
 
-            var collision = CheckHeadEntry(nextHead, simulated);
+            var collision = CheckHeadEntry(advance.Coord, simulated);
             if (collision != CollisionKind.None)
             {
-                return SimulationResult.Fatal(simulated, headPath, rewardEvents, collision, nextHead);
+                return SimulationResult.Fatal(simulated, headPath, rewardEvents, collision, advance.Coord);
             }
 
-            var rewardAtStep = rewardMap.TryGetValue(nextHead, out var rewardType);
+            var rewardAtStep = rewardMap.TryGetValue(advance.Coord, out var rewardType);
             if (rewardAtStep)
             {
-                rewardMap.Remove(nextHead);
+                rewardMap.Remove(advance.Coord);
                 ApplyRewardPickup(simulated, rewardType, previewOnly, rewardEvents, rewardMap);
 
                 if (animEvents != null)
@@ -1125,7 +1799,7 @@ public partial class MainGameController : Node2D
                     {
                         Kind = AnimKind.Pickup,
                         Duration = 0.6f,
-                        WorldPosition = GetCellCenter(nextHead),
+                        WorldPosition = GetCellCenter(advance.Coord),
                         FloatingText = DescribeRewardType(rewardType),
                     });
                 }
@@ -1133,13 +1807,13 @@ public partial class MainGameController : Node2D
 
             if (animEvents != null)
             {
-                RecordFleetStepAnimation(simulated, nextHead, animEvents);
+                RecordFleetStepAnimation(simulated, advance.Coord, animEvents);
             }
 
-            simulated.MoveOneStep(nextHead, _grid);
+            simulated.MoveOneStep(advance.Coord, _grid);
             if (simulated.HasDuplicateCoords())
             {
-                return SimulationResult.Fatal(simulated, headPath, rewardEvents, CollisionKind.Self, nextHead);
+                return SimulationResult.Fatal(simulated, headPath, rewardEvents, CollisionKind.Self, advance.Coord);
             }
         }
 
@@ -1278,44 +1952,8 @@ public partial class MainGameController : Node2D
 
     private string ApplyCardCalibration()
     {
-        var poolIndices = new List<int>();
-        if (_straightPoolUpgrades < MaximumCardMoveBonus)
-        {
-            poolIndices.Add(0);
-        }
-
-        if (_leftPoolUpgrades < MaximumCardMoveBonus)
-        {
-            poolIndices.Add(1);
-        }
-
-        if (_rightPoolUpgrades < MaximumCardMoveBonus)
-        {
-            poolIndices.Add(2);
-        }
-
-        if (poolIndices.Count == 0)
-        {
-            _hand.Clear();
-            FillHand();
-            return "拾取指令校准，但所有方向池均已满级，效果转为指令重载。";
-        }
-
-        var selected = poolIndices[_random.RandiRange(0, poolIndices.Count - 1)];
-        var poolName = selected switch
-        {
-            0 => "直行池",
-            1 => "左转池",
-            _ => "右转池",
-        };
-        var newLevel = selected switch
-        {
-            0 => ++_straightPoolUpgrades,
-            1 => ++_leftPoolUpgrades,
-            _ => ++_rightPoolUpgrades,
-        };
-
-        return $"拾取指令校准，{poolName}升级至 +{newLevel} 移动距离。";
+        ApplyPlayerSpeedBoost();
+        return "拾取指令校准，获得 3 秒加速。";
     }
 
     private static string DescribeSegment(int segmentIndex)
@@ -2483,6 +3121,24 @@ public partial class MainGameController : Node2D
         _preview = null;
         _selectedCard = null;
         _selectedCardIndex = -1;
+        _isPreviewPaused = false;
+    }
+
+    private void UnlockInputAndFlushBufferedSelection()
+    {
+        _skipRemainingTurnAnimations = false;
+        _inputLocked = false;
+
+        var pendingIndex = _pendingCardSelectionIndex;
+        _pendingCardSelectionIndex = -1;
+        if (!_isGameOver && pendingIndex >= 0 && pendingIndex < _hand.Count)
+        {
+            ApplyCardSelection(pendingIndex);
+            return;
+        }
+
+        UpdateHudState();
+        QueueRedraw();
     }
 
     private void ShowGameOver()
@@ -2490,7 +3146,7 @@ public partial class MainGameController : Node2D
         _gameOverOverlay.Visible = true;
         _gameOverTitleLabel.Text = _isVictory ? "胜利" : "舰队沉没";
         _gameOverReasonLabel.Text = _gameOverReason;
-        _gameOverStatsLabel.Text = $"第 {_turnCounter} 回合  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}";
+        _gameOverStatsLabel.Text = $"第 {_turnCounter} 波次  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}";
         _gameOverRestartButton.GrabFocus();
     }
 
@@ -2514,24 +3170,28 @@ public partial class MainGameController : Node2D
         if (_isGameOver)
         {
             var resultText = _isVictory ? "胜利" : "失败";
-            _statusLabel.Text = $"回合 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{resultText}: {_gameOverReason}";
+            _statusLabel.Text = $"波次 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{resultText}: {_gameOverReason}";
             return;
         }
 
-        var detail = "选择一张指令卡查看预览。";
+        var detail = "点击一张指令卡可暂停并查看预览。";
         if (_selectedCard != null && _preview != null)
         {
             detail = _preview.IsFatal
                 ? $"预览危险: {DescribeCollision(_preview.CollisionKind)}"
                 : $"已选择 {_selectedCard.Name}: {_selectedCard.Summary}";
         }
+        else if (_playerBoostRemainingSeconds > 0.0f)
+        {
+            detail = $"舰队处于加速状态，剩余 {Mathf.CeilToInt(_playerBoostRemainingSeconds)} 秒。";
+        }
 
-        _statusLabel.Text = $"回合 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{detail}";
+        _statusLabel.Text = $"波次 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{detail}";
     }
 
     private void UpdateHintLabel()
     {
-        _hintLabel.Text = "敌军会显示移动/开火意图。拾取补给会在移动中立即生效。";
+        _hintLabel.Text = "敌军会显示移动或开火意图。选择指令时游戏会暂停，确认后恢复。";
     }
 
     private void UpdateHoverTooltip(Vector2 localMousePosition, Vector2 screenMousePosition)
@@ -2577,7 +3237,7 @@ public partial class MainGameController : Node2D
 
         if (_fleet.Occupies(coord))
         {
-            lines.Add($"我方舰队：指令卡决定航向与步数，当前长度 {_fleet.Segments.Count}。" );
+            lines.Add($"我方舰队：指令卡决定航向，确认后会获得 3 秒加速，当前长度 {_fleet.Segments.Count}。" );
         }
 
         var enemy = FindEnemyAt(coord);
@@ -2628,16 +3288,16 @@ public partial class MainGameController : Node2D
         if (playerProjectileCount > 0)
         {
             lines.Add(playerProjectileCount == 1
-                ? $"己方炮弹：每回合前进 {ProjectileStepsPerPhase} 格，可拦截敌方炮弹。"
-                : $"己方炮弹 x{playerProjectileCount}：每回合前进 {ProjectileStepsPerPhase} 格，可拦截敌方炮弹。");
+                ? "己方炮弹：每 0.2 秒前进 1 格，可拦截敌方炮弹。"
+                : $"己方炮弹 x{playerProjectileCount}：每 0.2 秒前进 1 格，可拦截敌方炮弹。");
         }
 
         var enemyProjectileCount = CountProjectilesAt(_enemyProjectiles, coord);
         if (enemyProjectileCount > 0)
         {
             lines.Add(enemyProjectileCount == 1
-                ? $"敌方炮弹：每回合前进 {ProjectileStepsPerPhase} 格，命中舰队即失败。"
-                : $"敌方炮弹 x{enemyProjectileCount}：每回合前进 {ProjectileStepsPerPhase} 格，命中舰队即失败。");
+                ? "敌方炮弹：每 0.5 秒前进 1 格，命中舰队即失败。"
+                : $"敌方炮弹 x{enemyProjectileCount}：每 0.5 秒前进 1 格，命中舰队即失败。");
         }
     }
 
@@ -2662,7 +3322,7 @@ public partial class MainGameController : Node2D
             RewardType.GrowthModule => "驶入后会让舰队增长 1 节。",
             RewardType.CommandReload => "驶入后会立刻补满手牌。",
             RewardType.FirepowerUpgrade => "驶入后会强化一节舰船的火力。",
-            RewardType.CardCalibration => "驶入后会提升后续抽到的指令卡步数。",
+            RewardType.CardCalibration => "驶入后会立刻获得 3 秒加速。",
             _ => "驶入后会立刻生效。",
         };
 
@@ -2699,7 +3359,10 @@ public partial class MainGameController : Node2D
 
     private void UpdateRewardLabel()
     {
-        _rewardLabel.Text = $"奖励 {_rewards.Count}/{MaximumRewardsOnField}  池 +{_straightPoolUpgrades}/{_leftPoolUpgrades}/{_rightPoolUpgrades}\n{_lastRewardEvent}";
+        var boostText = _playerBoostRemainingSeconds > 0.0f
+            ? $"加速 {Mathf.CeilToInt(_playerBoostRemainingSeconds)} 秒"
+            : "加速 0 秒";
+        _rewardLabel.Text = $"奖励 {_rewards.Count}/{MaximumRewardsOnField}  {boostText}\n{_lastRewardEvent}";
     }
 
     private void UpdateCardButtons()
