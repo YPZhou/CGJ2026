@@ -9,8 +9,8 @@ public sealed class MoveCard
         new List<MoveCardDefinition>
         {
             new("直航", 3, 1, 0, false),
-            new("左满舵", 2, 1, +1, false),
-            new("右满舵", 2, 1, -1, false),
+            new("左满舵", 2, 1, -1, false),
+            new("右满舵", 2, 1, +1, false),
             new("紧急加速", 1, 2, 0, false),
             new("漂移转向", 1, 2, 0, true),
         };
@@ -38,7 +38,7 @@ public sealed class MoveCard
                 return $"移动 {TotalMove}";
             }
 
-            var turnText = TurnDelta > 0 ? "左转" : "右转";
+            var turnText = TurnDelta > 0 ? "右转" : "左转";
             return $"{turnText}后移动 {TotalMove}";
         }
     }
@@ -81,7 +81,7 @@ public sealed class MoveCard
                     Name = driftLeft ? "左漂移" : "右漂移",
                     Weight = definition.Weight,
                     BaseMove = definition.BaseMove,
-                    TurnDelta = driftLeft ? +1 : -1,
+                    TurnDelta = driftLeft ? -1 : +1,
                     MoveBonus = 0,
                     IsDriftVariant = true,
                 };
