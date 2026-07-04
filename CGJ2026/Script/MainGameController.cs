@@ -80,6 +80,14 @@ public partial class MainGameController : Node2D
     private int _baseCombatFontSize;
     private int _baseRewardFontSize;
     private int _baseHoverTooltipFontSize;
+    private ColorRect _gameOverOverlay = null!;
+    private Label _gameOverTitleLabel = null!;
+    private Label _gameOverReasonLabel = null!;
+    private Label _gameOverStatsLabel = null!;
+    private Button _gameOverRestartButton = null!;
+    private int _baseGameOverTitleFontSize;
+    private int _baseGameOverReasonFontSize;
+    private int _baseGameOverStatsFontSize;
     private int _baseCardFontSize;
     private int _baseConfirmFontSize;
 
@@ -105,7 +113,7 @@ public partial class MainGameController : Node2D
 
     public override void _Process(double delta)
     {
-        if (_grid == null)
+        if (_grid == null || _isGameOver)
         {
             return;
         }
@@ -165,6 +173,16 @@ public partial class MainGameController : Node2D
         _baseHoverTooltipFontSize = _hoverTooltipLabel.GetThemeFontSize("font_size");
         _baseCardFontSize = _cardButtons[0].GetThemeFontSize("font_size");
         _baseConfirmFontSize = _confirmButton.GetThemeFontSize("font_size");
+
+        _gameOverOverlay = GetNode<ColorRect>("HudLayer/GameOverOverlay");
+        _gameOverTitleLabel = GetNode<Label>("HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox/GameOverTitleLabel");
+        _gameOverReasonLabel = GetNode<Label>("HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox/GameOverReasonLabel");
+        _gameOverStatsLabel = GetNode<Label>("HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox/GameOverStatsLabel");
+        _gameOverRestartButton = GetNode<Button>("HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox/GameOverRestartButton");
+
+        _baseGameOverTitleFontSize = _gameOverTitleLabel.GetThemeFontSize("font_size");
+        _baseGameOverReasonFontSize = _gameOverReasonLabel.GetThemeFontSize("font_size");
+        _baseGameOverStatsFontSize = _gameOverStatsLabel.GetThemeFontSize("font_size");
     }
 
     private void HookHudEvents()
@@ -176,10 +194,13 @@ public partial class MainGameController : Node2D
         }
 
         _confirmButton.Pressed += OnConfirmPressed;
+        _gameOverRestartButton.Pressed += StartNewDemo;
     }
 
     private void StartNewDemo()
     {
+        _gameOverOverlay.Visible = false;
+
         _grid = new HexGrid(HexGrid.DefaultRadius);
         BuildDrawOrder();
 
@@ -1727,6 +1748,15 @@ public partial class MainGameController : Node2D
         _selectedCardIndex = -1;
     }
 
+    private void ShowGameOver()
+    {
+        _gameOverOverlay.Visible = true;
+        _gameOverTitleLabel.Text = _isVictory ? "胜利" : "舰队沉没";
+        _gameOverReasonLabel.Text = _gameOverReason;
+        _gameOverStatsLabel.Text = $"第 {_turnCounter} 回合  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}";
+        _gameOverRestartButton.GrabFocus();
+    }
+
     private void UpdateHudState()
     {
         UpdateStatusLabel();
@@ -1735,6 +1765,11 @@ public partial class MainGameController : Node2D
         UpdateRewardLabel();
         UpdateCardButtons();
         _confirmButton.Disabled = _isGameOver || _selectedCard == null;
+
+        if (_isGameOver && !_gameOverOverlay.Visible)
+        {
+            ShowGameOver();
+        }
     }
 
     private void UpdateStatusLabel()
@@ -2009,6 +2044,10 @@ public partial class MainGameController : Node2D
         var confirmHeight = Mathf.Max(32.0f, _baseConfirmButtonSize.Y * _uiScale);
         _confirmButton.CustomMinimumSize = new Vector2(confirmWidth, confirmHeight);
         _confirmButton.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_baseConfirmFontSize * _uiScale)));
+
+        _gameOverTitleLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(18, Mathf.RoundToInt(_baseGameOverTitleFontSize * _uiScale * 2.0f)));
+        _gameOverReasonLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseGameOverReasonFontSize * _uiScale)));
+        _gameOverStatsLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseGameOverStatsFontSize * _uiScale)));
 
         RecalculateBoardLayout();
     }

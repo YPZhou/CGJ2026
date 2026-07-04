@@ -68,3 +68,45 @@ text = "Card 3"
 [node name="ConfirmButton" type="Button" parent="HudLayer/HudMargin/HudVBox"]
 custom_minimum_size = Vector2(220, 52)
 text = "确认移动"
+
+[node name="GameOverOverlay" type="ColorRect" parent="HudLayer"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0, 0, 0, 0.75)
+mouse_filter = 1
+z_index = 20
+
+[node name="GameOverPanel" type="PanelContainer" parent="HudLayer/GameOverOverlay"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -180.0
+offset_top = -140.0
+offset_right = 180.0
+offset_bottom = 140.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="GameOverVBox" type="VBoxContainer" parent="HudLayer/GameOverOverlay/GameOverPanel"]
+theme_override_constants/separation = 16
+
+[node name="GameOverTitleLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox"]
+text = ""
+horizontal_alignment = 1
+
+[node name="GameOverReasonLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox"]
+text = ""
+horizontal_alignment = 1
+
+[node name="GameOverStatsLabel" type="Label" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox"]
+text = ""
+horizontal_alignment = 1
+
+[node name="GameOverRestartButton" type="Button" parent="HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox"]
+custom_minimum_size = Vector2(180, 52)
+size_flags_horizontal = 4
+text = "重新开始"
