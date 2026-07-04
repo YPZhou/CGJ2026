@@ -53,7 +53,9 @@ public partial class MainGameController : Node2D
     private string _lastCombatEvent = string.Empty;
     private string _lastRewardEvent = string.Empty;
     private int _turnCounter = 1;
-    private int _pendingNextDrawCardUpgradeCount;
+    private int _straightPoolUpgrades;
+    private int _leftPoolUpgrades;
+    private int _rightPoolUpgrades;
     private float _hexSize = 16.0f;
     private Vector2 _boardOrigin;
     private Vector2 _baseBoundsMin;
@@ -242,7 +244,9 @@ public partial class MainGameController : Node2D
         _enemyProjectiles.Clear();
         _rewards.Clear();
         _hand.Clear();
-        _pendingNextDrawCardUpgradeCount = 0;
+        _straightPoolUpgrades = 0;
+        _leftPoolUpgrades = 0;
+        _rightPoolUpgrades = 0;
         _turnCounter = 1;
         _isGameOver = false;
         _isVictory = false;
@@ -478,34 +482,16 @@ public partial class MainGameController : Node2D
 
     private void FillHand()
     {
-        while (_hand.Count < InitialHandSize)
+        _hand.Clear();
+
+        var cards = new List<MoveCard>
         {
-            _hand.Add(MoveCard.Draw(_random));
-        }
+            MoveCard.DrawFromPool(MoveCard.LeftPool, _leftPoolUpgrades, _random),
+            MoveCard.DrawFromPool(MoveCard.StraightPool, _straightPoolUpgrades, _random),
+            MoveCard.DrawFromPool(MoveCard.RightPool, _rightPoolUpgrades, _random),
+        };
 
-        ApplyPendingCardUpgrades();
-    }
-
-    private void ApplyPendingCardUpgrades()
-    {
-        if (_pendingNextDrawCardUpgradeCount <= 0)
-        {
-            return;
-        }
-
-        foreach (var card in _hand)
-        {
-            while (_pendingNextDrawCardUpgradeCount > 0 && card.MoveBonus < MaximumCardMoveBonus)
-            {
-                card.MoveBonus++;
-                _pendingNextDrawCardUpgradeCount--;
-            }
-
-            if (_pendingNextDrawCardUpgradeCount <= 0)
-            {
-                break;
-            }
-        }
+        _hand.AddRange(cards);
     }
 
     private void SelectCard(int index)
@@ -589,11 +575,7 @@ public partial class MainGameController : Node2D
         SpawnScheduledEnemiesForTurn(_turnCounter);
         TryAutoSpawnRewardForTurn(_turnCounter, rewardEvents);
 
-        if (_hand.Count == 0)
-        {
-            FillHand();
-        }
-
+        FillHand();
         RefreshEnemyIntents();
     }
 
@@ -821,31 +803,44 @@ public partial class MainGameController : Node2D
 
     private string ApplyCardCalibration()
     {
-        if (_hand.Count == 0)
+        var poolIndices = new List<int>();
+        if (_straightPoolUpgrades < MaximumCardMoveBonus)
         {
-            _pendingNextDrawCardUpgradeCount++;
-            return "拾取指令校准，下次补充手牌时第一张卡将获得 +1 移动。";
+            poolIndices.Add(0);
         }
 
-        var candidates = new List<int>();
-        for (var index = 0; index < _hand.Count; index++)
+        if (_leftPoolUpgrades < MaximumCardMoveBonus)
         {
-            if (_hand[index].MoveBonus < MaximumCardMoveBonus)
-            {
-                candidates.Add(index);
-            }
+            poolIndices.Add(1);
         }
 
-        if (candidates.Count == 0)
+        if (_rightPoolUpgrades < MaximumCardMoveBonus)
+        {
+            poolIndices.Add(2);
+        }
+
+        if (poolIndices.Count == 0)
         {
             _hand.Clear();
             FillHand();
-            return "拾取指令校准，但当前手牌均已满级，效果转为指令重载。";
+            return "拾取指令校准，但所有方向池均已满级，效果转为指令重载。";
         }
 
-        var selectedIndex = candidates[_random.RandiRange(0, candidates.Count - 1)];
-        _hand[selectedIndex].MoveBonus++;
-        return $"拾取指令校准，{_hand[selectedIndex].Name}移动距离提升至 {_hand[selectedIndex].TotalMove}。";
+        var selected = poolIndices[_random.RandiRange(0, poolIndices.Count - 1)];
+        var poolName = selected switch
+        {
+            0 => "直行池",
+            1 => "左转池",
+            _ => "右转池",
+        };
+        var newLevel = selected switch
+        {
+            0 => ++_straightPoolUpgrades,
+            1 => ++_leftPoolUpgrades,
+            _ => ++_rightPoolUpgrades,
+        };
+
+        return $"拾取指令校准，{poolName}升级至 +{newLevel} 移动距离。";
     }
 
     private static string DescribeSegment(int segmentIndex)
@@ -1962,7 +1957,7 @@ public partial class MainGameController : Node2D
 
     private void UpdateRewardLabel()
     {
-        _rewardLabel.Text = $"奖励 {_rewards.Count}/{MaximumRewardsOnField}  待校准 +{_pendingNextDrawCardUpgradeCount}\n{_lastRewardEvent}";
+        _rewardLabel.Text = $"奖励 {_rewards.Count}/{MaximumRewardsOnField}  池 +{_straightPoolUpgrades}/{_leftPoolUpgrades}/{_rightPoolUpgrades}\n{_lastRewardEvent}";
     }
 
     private void UpdateCardButtons()

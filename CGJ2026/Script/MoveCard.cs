@@ -5,15 +5,42 @@ using Godot;
 
 public sealed class MoveCard
 {
-    public static readonly IReadOnlyList<MoveCardDefinition> Definitions =
-        new List<MoveCardDefinition>
+    public readonly struct SubPoolEntry
+    {
+        public SubPoolEntry(string name, int weight, int baseMove, int turnDelta)
         {
-            new("直航", 3, 1, 0, false),
-            new("左满舵", 2, 1, -1, false),
-            new("右满舵", 2, 1, +1, false),
-            new("紧急加速", 1, 2, 0, false),
-            new("漂移转向", 1, 2, 0, true),
-        };
+            Name = name;
+            Weight = weight;
+            BaseMove = baseMove;
+            TurnDelta = turnDelta;
+        }
+
+        public string Name { get; }
+
+        public int Weight { get; }
+
+        public int BaseMove { get; }
+
+        public int TurnDelta { get; }
+    }
+
+    public static readonly SubPoolEntry[] StraightPool =
+    {
+        new("直航", 3, 1, 0),
+        new("紧急加速", 1, 2, 0),
+    };
+
+    public static readonly SubPoolEntry[] LeftPool =
+    {
+        new("左满舵", 4, 1, -1),
+        new("左漂移", 1, 2, -1),
+    };
+
+    public static readonly SubPoolEntry[] RightPool =
+    {
+        new("右满舵", 4, 1, +1),
+        new("右漂移", 1, 2, +1),
+    };
 
     public string Name { get; init; } = string.Empty;
 
@@ -43,83 +70,34 @@ public sealed class MoveCard
         }
     }
 
-    public MoveCard Clone()
-    {
-        return new MoveCard
-        {
-            Name = Name,
-            Weight = Weight,
-            BaseMove = BaseMove,
-            TurnDelta = TurnDelta,
-            MoveBonus = MoveBonus,
-            IsDriftVariant = IsDriftVariant,
-        };
-    }
-
-    public static MoveCard Draw(RandomNumberGenerator random)
+    public static MoveCard DrawFromPool(SubPoolEntry[] pool, int moveBonus, RandomNumberGenerator random)
     {
         var totalWeight = 0;
-        foreach (var definition in Definitions)
+        foreach (var entry in pool)
         {
-            totalWeight += definition.Weight;
+            totalWeight += entry.Weight;
         }
 
         var roll = random.RandiRange(1, totalWeight);
-        foreach (var definition in Definitions)
+        foreach (var entry in pool)
         {
-            roll -= definition.Weight;
+            roll -= entry.Weight;
             if (roll > 0)
             {
                 continue;
             }
 
-            if (definition.IsDrift)
-            {
-                var driftLeft = random.Randf() < 0.5f;
-                return new MoveCard
-                {
-                    Name = driftLeft ? "左漂移" : "右漂移",
-                    Weight = definition.Weight,
-                    BaseMove = definition.BaseMove,
-                    TurnDelta = driftLeft ? -1 : +1,
-                    MoveBonus = 0,
-                    IsDriftVariant = true,
-                };
-            }
-
             return new MoveCard
             {
-                Name = definition.Name,
-                Weight = definition.Weight,
-                BaseMove = definition.BaseMove,
-                TurnDelta = definition.TurnDelta,
-                MoveBonus = 0,
-                IsDriftVariant = false,
+                Name = entry.Name,
+                Weight = entry.Weight,
+                BaseMove = entry.BaseMove,
+                TurnDelta = entry.TurnDelta,
+                MoveBonus = moveBonus,
+                IsDriftVariant = entry.Name is "左漂移" or "右漂移",
             };
         }
 
-        throw new InvalidOperationException("Unable to draw a move card.");
+        throw new InvalidOperationException("Unable to draw a move card from pool.");
     }
-}
-
-public readonly struct MoveCardDefinition
-{
-    public MoveCardDefinition(string name, int weight, int baseMove, int turnDelta, bool isDrift)
-    {
-        Name = name;
-        Weight = weight;
-        BaseMove = baseMove;
-        TurnDelta = turnDelta;
-        IsDrift = isDrift;
-    }
-
-    public string Name { get; }
-
-    public int Weight { get; }
-
-    public int BaseMove { get; }
-
-    public int TurnDelta { get; }
-
-    public bool IsDrift { get; }
 }
