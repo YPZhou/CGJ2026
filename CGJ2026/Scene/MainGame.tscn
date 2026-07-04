@@ -1,3 +1,54 @@
-[gd_scene format=3 uid="uid://bgx6ntkglx61k"]
+[gd_scene load_steps=2 format=3 uid="uid://bgx6ntkglx61k"]
+
+[ext_resource type="Script" path="res://Script/MainGameController.cs" id="1_7u6d5"]
 
 [node name="Node2D" type="Node2D" unique_id=146032470]
+script = ExtResource("1_7u6d5")
+
+[node name="HudLayer" type="CanvasLayer" parent="."]
+
+[node name="HudMargin" type="MarginContainer" parent="HudLayer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = -16.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="HudVBox" type="VBoxContainer" parent="HudLayer/HudMargin"]
+theme_override_constants/separation = 12
+
+[node name="StatusLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
+text = "Initializing map and fleet demo..."
+
+[node name="HintLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
+text = "Map + Fleet core demo"
+
+[node name="HudSpacer" type="Control" parent="HudLayer/HudMargin/HudVBox"]
+size_flags_vertical = 3
+
+[node name="CardsRow" type="HBoxContainer" parent="HudLayer/HudMargin/HudVBox"]
+theme_override_constants/separation = 12
+size_flags_horizontal = 3
+
+[node name="CardButton0" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow"]
+custom_minimum_size = Vector2(220, 84)
+size_flags_horizontal = 3
+text = "Card 1"
+
+[node name="CardButton1" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow"]
+custom_minimum_size = Vector2(220, 84)
+size_flags_horizontal = 3
+text = "Card 2"
+
+[node name="CardButton2" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow"]
+custom_minimum_size = Vector2(220, 84)
+size_flags_horizontal = 3
+text = "Card 3"
+
+[node name="ConfirmButton" type="Button" parent="HudLayer/HudMargin/HudVBox"]
+custom_minimum_size = Vector2(220, 52)
+text = "确认移动"
