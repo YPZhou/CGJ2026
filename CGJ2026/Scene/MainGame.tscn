@@ -7,6 +7,16 @@ script = ExtResource("1_7u6d5")
 
 [node name="HudLayer" type="CanvasLayer" parent="."]
 
+[node name="HoverTooltip" type="PanelContainer" parent="HudLayer"]
+visible = false
+offset_right = 12.0
+offset_bottom = 12.0
+mouse_filter = 2
+z_index = 10
+
+[node name="HoverTooltipLabel" type="Label" parent="HudLayer/HoverTooltip"]
+text = ""
+
 [node name="HudMargin" type="MarginContainer" parent="HudLayer"]
 anchors_preset = 15
 anchor_right = 1.0
@@ -29,6 +39,9 @@ text = "Map + Fleet core demo"
 
 [node name="CombatLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
 text = "敌舰 0  敌弹 0  己弹 0"
+
+[node name="RewardLabel" type="Label" parent="HudLayer/HudMargin/HudVBox"]
+text = "奖励 0/3  待校准 +0"
 
 [node name="HudSpacer" type="Control" parent="HudLayer/HudMargin/HudVBox"]
 size_flags_vertical = 3

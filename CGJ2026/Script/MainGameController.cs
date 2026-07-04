@@ -11,6 +11,11 @@ public partial class MainGameController : Node2D
     private const int MinimumReefSize = 1;
     private const int MaximumReefSize = 3;
     private const int ReefSafeDistance = 3;
+    private const int MaximumRewardsOnField = 3;
+    private const int RewardAutoSpawnInterval = 6;
+    private const int FleetLengthGoal = 9;
+    private const int MaximumRange = 6;
+    private const int MaximumCardMoveBonus = 2;
     private const float BaseViewportWidth = 1280.0f;
     private const float BaseViewportHeight = 720.0f;
     private const float BoardMargin = 36.0f;
@@ -20,6 +25,9 @@ public partial class MainGameController : Node2D
     private const float MaximumUiScale = 1.5f;
     private const float MinimumHexSize = 4.0f;
     private const float MaximumHexSize = 34.0f;
+    private const float HoverTooltipOffsetX = 18.0f;
+    private const float HoverTooltipOffsetY = 14.0f;
+    private const float HoverTooltipViewportMargin = 8.0f;
 
     private static readonly HexCoord Origin = new(0, 0, 0);
 
@@ -30,6 +38,7 @@ public partial class MainGameController : Node2D
     private readonly List<EnemyState> _enemies = new();
     private readonly List<ProjectileState> _playerProjectiles = new();
     private readonly List<ProjectileState> _enemyProjectiles = new();
+    private readonly Dictionary<HexCoord, RewardType> _rewards = new();
 
     private Texture2D _placeholder = null!;
     private HexGrid _grid = null!;
@@ -39,9 +48,12 @@ public partial class MainGameController : Node2D
     private MoveCard? _selectedCard;
     private int _selectedCardIndex = -1;
     private bool _isGameOver;
+    private bool _isVictory;
     private string _gameOverReason = string.Empty;
     private string _lastCombatEvent = string.Empty;
+    private string _lastRewardEvent = string.Empty;
     private int _turnCounter = 1;
+    private int _pendingNextDrawCardUpgradeCount;
     private float _hexSize = 16.0f;
     private Vector2 _boardOrigin;
     private Vector2 _baseBoundsMin;
@@ -54,6 +66,9 @@ public partial class MainGameController : Node2D
     private Label _statusLabel = null!;
     private Label _hintLabel = null!;
     private Label _combatLabel = null!;
+    private Label _rewardLabel = null!;
+    private PanelContainer _hoverTooltip = null!;
+    private Label _hoverTooltipLabel = null!;
     private Button _confirmButton = null!;
     private float _baseHudMargin;
     private int _baseHudSeparation;
@@ -63,6 +78,8 @@ public partial class MainGameController : Node2D
     private int _baseStatusFontSize;
     private int _baseHintFontSize;
     private int _baseCombatFontSize;
+    private int _baseRewardFontSize;
+    private int _baseHoverTooltipFontSize;
     private int _baseCardFontSize;
     private int _baseConfirmFontSize;
 
@@ -86,6 +103,16 @@ public partial class MainGameController : Node2D
         }
     }
 
+    public override void _Process(double delta)
+    {
+        if (_grid == null)
+        {
+            return;
+        }
+
+        UpdateHoverTooltip(GetLocalMousePosition(), GetViewport().GetMousePosition());
+    }
+
     public override void _Draw()
     {
         if (_grid == null)
@@ -95,6 +122,7 @@ public partial class MainGameController : Node2D
 
         DrawBoard();
         DrawReefs();
+        DrawRewards();
         DrawProjectiles(_enemyProjectiles, new Color(0.94f, 0.46f, 0.22f, 0.95f), 0.46f);
         DrawProjectiles(_playerProjectiles, new Color(0.98f, 0.86f, 0.32f, 0.95f), 0.42f);
         DrawEnemies();
@@ -115,6 +143,9 @@ public partial class MainGameController : Node2D
         _statusLabel = GetNode<Label>("HudLayer/HudMargin/HudVBox/StatusLabel");
         _hintLabel = GetNode<Label>("HudLayer/HudMargin/HudVBox/HintLabel");
         _combatLabel = GetNode<Label>("HudLayer/HudMargin/HudVBox/CombatLabel");
+        _rewardLabel = GetNode<Label>("HudLayer/HudMargin/HudVBox/RewardLabel");
+        _hoverTooltip = GetNode<PanelContainer>("HudLayer/HoverTooltip");
+        _hoverTooltipLabel = GetNode<Label>("HudLayer/HoverTooltip/HoverTooltipLabel");
         _confirmButton = GetNode<Button>("HudLayer/HudMargin/HudVBox/ConfirmButton");
 
         _cardButtons.Clear();
@@ -130,6 +161,8 @@ public partial class MainGameController : Node2D
         _baseStatusFontSize = _statusLabel.GetThemeFontSize("font_size");
         _baseHintFontSize = _hintLabel.GetThemeFontSize("font_size");
         _baseCombatFontSize = _combatLabel.GetThemeFontSize("font_size");
+        _baseRewardFontSize = _rewardLabel.GetThemeFontSize("font_size");
+        _baseHoverTooltipFontSize = _hoverTooltipLabel.GetThemeFontSize("font_size");
         _baseCardFontSize = _cardButtons[0].GetThemeFontSize("font_size");
         _baseConfirmFontSize = _confirmButton.GetThemeFontSize("font_size");
     }
@@ -186,16 +219,23 @@ public partial class MainGameController : Node2D
         _enemies.Clear();
         _playerProjectiles.Clear();
         _enemyProjectiles.Clear();
-        SeedCombatDemo();
+        _rewards.Clear();
         _hand.Clear();
+        _pendingNextDrawCardUpgradeCount = 0;
+        _turnCounter = 1;
+        _isGameOver = false;
+        _isVictory = false;
+        _gameOverReason = string.Empty;
+
+        SpawnOpeningEnemies();
+        SpawnInitialRewards();
         FillHand();
         ClearSelection();
-        _isGameOver = false;
-        _gameOverReason = string.Empty;
-        _lastCombatEvent = "战斗就绪。";
-        _turnCounter = 1;
-        UpdateEnemyFireDirections();
 
+        _lastCombatEvent = "敌军已进入海域，敌方意图已标示。";
+        _lastRewardEvent = "海面上已部署 2 处补给。";
+
+        RefreshEnemyIntents();
         RefreshResponsiveLayout();
         UpdateHudState();
         QueueRedraw();
@@ -285,88 +325,134 @@ public partial class MainGameController : Node2D
         }
     }
 
-    private void SeedCombatDemo()
+    private void SpawnOpeningEnemies()
     {
-        var head = _fleet.Head;
-        var headDirection = _fleet.HeadDirection;
-
-        AddDemoEnemy(
-            head + (HexCoord.Directions[headDirection] * 4),
-            head + (HexCoord.Directions[HexCoord.WrapDirection(headDirection + 1)] * 4),
-            head + (HexCoord.Directions[HexCoord.WrapDirection(headDirection - 1)] * 4));
-
-        AddDemoEnemy(
-            head + (HexCoord.Directions[HexCoord.WrapDirection(headDirection + 2)] * 5),
-            head + (HexCoord.Directions[HexCoord.WrapDirection(headDirection - 2)] * 5),
-            head + (HexCoord.Directions[HexCoord.WrapDirection(headDirection + 3)] * 6));
+        for (var index = 0; index < 2; index++)
+        {
+            TrySpawnOpeningCharger();
+        }
     }
 
-    private void AddDemoEnemy(params HexCoord[] preferredCells)
+    private void SpawnInitialRewards()
     {
-        foreach (var cell in preferredCells)
-        {
-            if (!IsCombatCellOpen(cell))
-            {
-                continue;
-            }
+        TrySpawnRandomReward(minimumDistanceFromExistingRewards: 0);
+        TrySpawnRandomReward(minimumDistanceFromExistingRewards: 4);
+    }
 
-            _enemies.Add(new EnemyState(cell, GetDirectionToward(cell, _fleet.Head)));
-            return;
+    private bool TrySpawnOpeningCharger()
+    {
+        return TrySpawnEnemyWithFallbacks(
+            EnemyType.Charger,
+            cell =>
+            {
+                var boundaryDistance = GetBoundaryDistance(cell);
+                return boundaryDistance >= 1 && boundaryDistance <= 2 && cell.DistanceTo(_fleet.Head) >= 8;
+            },
+            cell =>
+            {
+                var boundaryDistance = GetBoundaryDistance(cell);
+                return boundaryDistance <= 2 && cell.DistanceTo(_fleet.Head) >= 7;
+            },
+            cell => cell.DistanceTo(_fleet.Head) >= 6);
+    }
+
+    private bool TrySpawnEdgeCharger()
+    {
+        return TrySpawnEnemyWithFallbacks(
+            EnemyType.Charger,
+            cell => GetBoundaryDistance(cell) <= 1 && cell.DistanceTo(_fleet.Head) >= 6,
+            cell => GetBoundaryDistance(cell) <= 2 && cell.DistanceTo(_fleet.Head) >= 5,
+            cell => cell.DistanceTo(_fleet.Head) >= 5);
+    }
+
+    private bool TrySpawnArtillery()
+    {
+        return TrySpawnEnemyWithFallbacks(
+            EnemyType.Artillery,
+            cell =>
+            {
+                var boundaryDistance = GetBoundaryDistance(cell);
+                var fleetDistance = cell.DistanceTo(_fleet.Head);
+                return boundaryDistance >= 1 && boundaryDistance <= 3 && fleetDistance >= 5 && fleetDistance <= 9;
+            },
+            cell => cell.DistanceTo(_fleet.Head) >= 5);
+    }
+
+    private bool TrySpawnMine()
+    {
+        return TrySpawnEnemyWithFallbacks(
+            EnemyType.Mine,
+            cell =>
+            {
+                var boundaryDistance = GetBoundaryDistance(cell);
+                var fleetDistance = cell.DistanceTo(_fleet.Head);
+                return boundaryDistance >= 3 && boundaryDistance <= 7 && fleetDistance >= 5 && fleetDistance <= 9;
+            },
+            cell => GetBoundaryDistance(cell) >= 2 && cell.DistanceTo(_fleet.Head) >= 4);
+    }
+
+    private bool TrySpawnSplitter()
+    {
+        return TrySpawnEnemyWithFallbacks(
+            EnemyType.Splitter,
+            cell =>
+            {
+                var boundaryDistance = GetBoundaryDistance(cell);
+                return boundaryDistance >= 1 && boundaryDistance <= 4 && cell.DistanceTo(_fleet.Head) >= 6;
+            },
+            cell => cell.DistanceTo(_fleet.Head) >= 6);
+    }
+
+    private bool TrySpawnEnemyWithFallbacks(EnemyType type, params Predicate<HexCoord>[] predicates)
+    {
+        foreach (var predicate in predicates)
+        {
+            if (TrySpawnEnemy(type, predicate))
+            {
+                return true;
+            }
         }
 
+        return false;
+    }
+
+    private bool TrySpawnEnemy(EnemyType type, Predicate<HexCoord> predicate)
+    {
+        var candidates = new List<HexCoord>();
         foreach (var cell in _drawOrderedCells)
         {
-            var distance = cell.DistanceTo(_fleet.Head);
-            if (distance < 4 || distance > 7 || !IsCombatCellOpen(cell))
+            if (!predicate(cell) || !IsEnemySpawnCellOpen(cell))
             {
                 continue;
             }
 
-            _enemies.Add(new EnemyState(cell, GetDirectionToward(cell, _fleet.Head)));
-            return;
+            candidates.Add(cell);
         }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var coord = candidates[_random.RandiRange(0, candidates.Count - 1)];
+        _enemies.Add(new EnemyState(type, coord, _turnCounter));
+        return true;
     }
 
-    private bool IsCombatCellOpen(HexCoord cell)
+    private bool IsEnemySpawnCellOpen(HexCoord cell)
     {
         return _grid.Contains(cell)
             && !_reefCells.Contains(cell)
             && !_fleet.Occupies(cell)
             && !HasEnemyAt(cell)
-            && !HasAnyProjectileAt(cell);
+            && !HasAnyProjectileAt(cell)
+            && !_rewards.ContainsKey(cell);
     }
 
-    private void UpdateEnemyFireDirections()
+    private int GetBoundaryDistance(HexCoord cell)
     {
-        foreach (var enemy in _enemies)
-        {
-            if (!enemy.IsAlive)
-            {
-                continue;
-            }
-
-            enemy.FireDirection = GetDirectionToward(enemy.Coord, _fleet.Head);
-        }
-    }
-
-    private int GetDirectionToward(HexCoord from, HexCoord target)
-    {
-        var bestDirection = 0;
-        var bestDistance = int.MaxValue;
-
-        for (var direction = 0; direction < HexCoord.Directions.Length; direction++)
-        {
-            var candidateDistance = from.Step(direction).DistanceTo(target);
-            if (candidateDistance >= bestDistance)
-            {
-                continue;
-            }
-
-            bestDistance = candidateDistance;
-            bestDirection = direction;
-        }
-
-        return bestDirection;
+        var edgeDistance = Math.Max(Math.Abs(cell.Q), Math.Max(Math.Abs(cell.R), Math.Abs(cell.S)));
+        return _grid.Radius - edgeDistance;
     }
 
     private void FillHand()
@@ -374,6 +460,30 @@ public partial class MainGameController : Node2D
         while (_hand.Count < InitialHandSize)
         {
             _hand.Add(MoveCard.Draw(_random));
+        }
+
+        ApplyPendingCardUpgrades();
+    }
+
+    private void ApplyPendingCardUpgrades()
+    {
+        if (_pendingNextDrawCardUpgradeCount <= 0)
+        {
+            return;
+        }
+
+        foreach (var card in _hand)
+        {
+            while (_pendingNextDrawCardUpgradeCount > 0 && card.MoveBonus < MaximumCardMoveBonus)
+            {
+                card.MoveBonus++;
+                _pendingNextDrawCardUpgradeCount--;
+            }
+
+            if (_pendingNextDrawCardUpgradeCount <= 0)
+            {
+                break;
+            }
         }
     }
 
@@ -386,7 +496,7 @@ public partial class MainGameController : Node2D
 
         _selectedCardIndex = index;
         _selectedCard = _hand[index];
-        _preview = SimulateCard(_fleet, _selectedCard);
+        _preview = ResolveCardMovement(_fleet, _selectedCard, previewOnly: true);
 
         UpdateHudState();
         QueueRedraw();
@@ -394,70 +504,179 @@ public partial class MainGameController : Node2D
 
     private void OnConfirmPressed()
     {
-        if (_isGameOver || _selectedCard == null || _selectedCardIndex < 0)
+        if (_isGameOver || _selectedCard == null || _selectedCardIndex < 0 || _selectedCardIndex >= _hand.Count)
         {
             return;
         }
 
-        var result = SimulateCard(_fleet, _selectedCard);
-        if (result.IsFatal)
+        var activeCard = _hand[_selectedCardIndex];
+        _hand.RemoveAt(_selectedCardIndex);
+
+        var rewardEvents = new List<string>();
+        var movementResult = ResolveCardMovement(_fleet, activeCard, previewOnly: false);
+        AppendRewardEvents(rewardEvents, movementResult.RewardEvents);
+
+        if (movementResult.IsFatal)
         {
-            _preview = result;
+            _preview = movementResult;
             _isGameOver = true;
-            _gameOverReason = DescribeCollision(result.CollisionKind);
+            _isVictory = false;
+            _gameOverReason = DescribeCollision(movementResult.CollisionKind);
             _lastCombatEvent = "舰队在移动阶段沉没。";
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
             UpdateHudState();
             QueueRedraw();
             return;
         }
 
-        _fleet = result.Fleet;
-        _hand.RemoveAt(_selectedCardIndex);
+        _fleet = movementResult.Fleet;
         ClearSelection();
 
         var combatSummaries = new List<string>
         {
-            ResolvePlayerFire(),
+            ResolvePlayerFire(rewardEvents),
         };
 
         if (!_isGameOver)
         {
-            combatSummaries.Add(FireDemoEnemies());
-        }
-
-        if (!_isGameOver)
-        {
-            combatSummaries.Add(AdvanceProjectiles());
+            combatSummaries.Add(ResolveEnemyPhase(rewardEvents));
         }
 
         _lastCombatEvent = BuildCombatSummary(combatSummaries);
 
         if (!_isGameOver)
         {
-            _turnCounter++;
-            if (_hand.Count == 0)
-            {
-                FillHand();
-            }
-
-            UpdateEnemyFireDirections();
+            CompleteTurn(rewardEvents);
         }
 
+        _lastRewardEvent = BuildRewardSummary(rewardEvents);
         UpdateHudState();
         QueueRedraw();
     }
 
-    private void ClearSelection()
+    private void CompleteTurn(List<string> rewardEvents)
     {
-        _preview = null;
-        _selectedCard = null;
-        _selectedCardIndex = -1;
+        if (_fleet.Segments.Count >= FleetLengthGoal)
+        {
+            _isGameOver = true;
+            _isVictory = true;
+            _gameOverReason = "舰队扩编完成";
+            return;
+        }
+
+        _turnCounter++;
+        SpawnScheduledEnemiesForTurn(_turnCounter);
+        TryAutoSpawnRewardForTurn(_turnCounter, rewardEvents);
+
+        if (_hand.Count == 0)
+        {
+            FillHand();
+        }
+
+        RefreshEnemyIntents();
     }
 
-    private SimulationResult SimulateCard(FleetState source, MoveCard card)
+    private void SpawnScheduledEnemiesForTurn(int turn)
+    {
+        switch (turn)
+        {
+            case 3:
+                TrySpawnMine();
+                TrySpawnMine();
+                break;
+            case 4:
+                TrySpawnEdgeCharger();
+                TrySpawnEdgeCharger();
+                break;
+            case 5:
+                TrySpawnArtillery();
+                break;
+            case 7:
+                TrySpawnEdgeCharger();
+                TrySpawnArtillery();
+                break;
+            case 8:
+                if (_fleet.Segments.Count >= 5)
+                {
+                    TrySpawnSplitter();
+                }
+
+                break;
+            case 9:
+                TrySpawnMine();
+                break;
+        }
+
+        if (turn >= 10 && ((turn - 10) % 4) == 0)
+        {
+            var waveCount = 2 + ((turn - 10) / 4);
+            for (var spawnIndex = 0; spawnIndex < waveCount; spawnIndex++)
+            {
+                if (_random.Randf() < 0.5f)
+                {
+                    TrySpawnEdgeCharger();
+                }
+                else
+                {
+                    TrySpawnArtillery();
+                }
+            }
+        }
+    }
+
+    private void RefreshEnemyIntents()
+    {
+        foreach (var enemy in _enemies)
+        {
+            if (!enemy.IsAlive)
+            {
+                continue;
+            }
+
+            enemy.MoveIntentDirection = null;
+            enemy.AttackIntentDirection = null;
+            enemy.HasRadialAttackIntent = false;
+
+            switch (enemy.Type)
+            {
+                case EnemyType.Charger:
+                case EnemyType.Splitter:
+                    if (TryGetGreedyPlayerStep(enemy.Coord, out var moveDirection, out _))
+                    {
+                        enemy.MoveIntentDirection = moveDirection;
+                    }
+
+                    break;
+                case EnemyType.Artillery:
+                    var originAfterMove = enemy.Coord;
+                    if (TryGetArtilleryMove(enemy.Coord, out var artilleryMoveDirection, out var artilleryMoveTarget))
+                    {
+                        enemy.MoveIntentDirection = artilleryMoveDirection;
+                        originAfterMove = artilleryMoveTarget;
+                    }
+
+                    enemy.AttackIntentDirection = GetDirectionToward(originAfterMove, GetPredictedPlayerCoord());
+                    break;
+                case EnemyType.Mine:
+                    enemy.HasRadialAttackIntent = ShouldMineFireThisTurn(enemy);
+                    break;
+            }
+        }
+    }
+
+    private HexCoord GetPredictedPlayerCoord()
+    {
+        return _fleet.Head.Step(_fleet.HeadDirection);
+    }
+
+    private SimulationResult ResolveCardMovement(FleetState source, MoveCard card, bool previewOnly)
     {
         var simulated = source.Clone();
         var headPath = new List<HexCoord>();
+        var rewardEvents = new List<string>();
+        var rewardMap = previewOnly
+            ? new Dictionary<HexCoord, RewardType>(_rewards)
+            : _rewards;
 
         for (var stepIndex = 0; stepIndex < card.TotalMove; stepIndex++)
         {
@@ -472,17 +691,155 @@ public partial class MainGameController : Node2D
             var collision = CheckHeadEntry(nextHead, simulated);
             if (collision != CollisionKind.None)
             {
-                return SimulationResult.Fatal(simulated, headPath, collision, nextHead);
+                return SimulationResult.Fatal(simulated, headPath, rewardEvents, collision, nextHead);
+            }
+
+            if (rewardMap.TryGetValue(nextHead, out var rewardType))
+            {
+                rewardMap.Remove(nextHead);
+                ApplyRewardPickup(simulated, rewardType, previewOnly, rewardEvents, rewardMap);
             }
 
             simulated.MoveOneStep(nextHead, _grid);
             if (simulated.HasDuplicateCoords())
             {
-                return SimulationResult.Fatal(simulated, headPath, CollisionKind.Self, nextHead);
+                return SimulationResult.Fatal(simulated, headPath, rewardEvents, CollisionKind.Self, nextHead);
             }
         }
 
-        return SimulationResult.Success(simulated, headPath);
+        return SimulationResult.Success(simulated, headPath, rewardEvents);
+    }
+
+    private void ApplyRewardPickup(FleetState fleet, RewardType rewardType, bool previewOnly, List<string> rewardEvents, IDictionary<HexCoord, RewardType> rewardMap)
+    {
+        if (previewOnly)
+        {
+            if (rewardType == RewardType.GrowthModule)
+            {
+                TryGrowFleet(fleet, rewardMap);
+            }
+
+            return;
+        }
+
+        switch (rewardType)
+        {
+            case RewardType.GrowthModule:
+                if (TryGrowFleet(fleet, rewardMap))
+                {
+                    rewardEvents.Add("拾取增殖模块，舰队长度 +1。");
+                }
+                else
+                {
+                    rewardEvents.Add("拾取增殖模块，但尾部周围没有可用空位。");
+                }
+
+                break;
+            case RewardType.CommandReload:
+                _hand.Clear();
+                FillHand();
+                rewardEvents.Add("拾取指令重载，当前手牌已重抽。");
+                break;
+            case RewardType.FirepowerUpgrade:
+                rewardEvents.Add(ApplyRandomFirepowerUpgrade(fleet));
+                break;
+            case RewardType.CardCalibration:
+                rewardEvents.Add(ApplyCardCalibration());
+                break;
+        }
+    }
+
+    private bool TryGrowFleet(FleetState fleet, IDictionary<HexCoord, RewardType> rewardMap)
+    {
+        return fleet.TryAddSegment(_grid, cell =>
+            _reefCells.Contains(cell)
+            || HasEnemyAt(cell)
+            || HasAnyProjectileAt(cell)
+            || rewardMap.ContainsKey(cell));
+    }
+
+    private string ApplyRandomFirepowerUpgrade(FleetState fleet)
+    {
+        var segmentIndex = _random.RandiRange(0, fleet.Segments.Count - 1);
+        var segment = fleet.Segments[segmentIndex];
+
+        while (true)
+        {
+            switch (_random.RandiRange(0, 3))
+            {
+                case 0:
+                    if (segment.Range >= MaximumRange)
+                    {
+                        continue;
+                    }
+
+                    segment.Range++;
+                    return $"火力强化：{DescribeSegment(segmentIndex)}射程提升至 {segment.Range}。";
+                case 1:
+                    segment.Damage++;
+                    return $"火力强化：{DescribeSegment(segmentIndex)}伤害提升至 {segment.Damage}。";
+                case 2:
+                    if (segment.ScatterLevel >= 2)
+                    {
+                        continue;
+                    }
+
+                    segment.ScatterLevel++;
+                    return $"火力强化：{DescribeSegment(segmentIndex)}获得{DescribeScatter(segment.ScatterLevel)}。";
+                case 3:
+                    if (segment.HasExplosive)
+                    {
+                        continue;
+                    }
+
+                    segment.HasExplosive = true;
+                    return $"火力强化：{DescribeSegment(segmentIndex)}获得爆炸弹头。";
+            }
+        }
+    }
+
+    private string ApplyCardCalibration()
+    {
+        if (_hand.Count == 0)
+        {
+            _pendingNextDrawCardUpgradeCount++;
+            return "拾取指令校准，下次补充手牌时第一张卡将获得 +1 移动。";
+        }
+
+        var candidates = new List<int>();
+        for (var index = 0; index < _hand.Count; index++)
+        {
+            if (_hand[index].MoveBonus < MaximumCardMoveBonus)
+            {
+                candidates.Add(index);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            _hand.Clear();
+            FillHand();
+            return "拾取指令校准，但当前手牌均已满级，效果转为指令重载。";
+        }
+
+        var selectedIndex = candidates[_random.RandiRange(0, candidates.Count - 1)];
+        _hand[selectedIndex].MoveBonus++;
+        return $"拾取指令校准，{_hand[selectedIndex].Name}移动距离提升至 {_hand[selectedIndex].TotalMove}。";
+    }
+
+    private static string DescribeSegment(int segmentIndex)
+    {
+        return segmentIndex == 0 ? "蛇头" : $"第 {segmentIndex + 1} 节舰船";
+    }
+
+    private static string DescribeScatter(int scatterLevel)
+    {
+        return scatterLevel switch
+        {
+            1 => "散射 I",
+            2 => "散射 II",
+            _ => "散射",
+        };
     }
 
     private CollisionKind CheckHeadEntry(HexCoord target, FleetState fleet)
@@ -515,7 +872,7 @@ public partial class MainGameController : Node2D
         return CollisionKind.None;
     }
 
-    private string ResolvePlayerFire()
+    private string ResolvePlayerFire(List<string> rewardEvents)
     {
         var directHits = 0;
         var cancelledProjectiles = 0;
@@ -559,16 +916,18 @@ public partial class MainGameController : Node2D
             }
         }
 
-        var destroyedEnemies = RemoveDefeatedEnemies();
+        var destroyedEnemies = ResolveDefeatedEnemies(rewardEvents);
         if (directHits == 0 && cancelledProjectiles == 0 && spawnedProjectiles == 0)
         {
-            return "玩家齐射未形成有效火线。";
+            return destroyedEnemies == 0
+                ? "玩家齐射未形成有效火线。"
+                : $"玩家齐射击沉 {destroyedEnemies} 艘敌舰。";
         }
 
         var destroyedText = destroyedEnemies > 0
             ? $" 击沉 {destroyedEnemies} 艘敌舰。"
             : string.Empty;
-        return $"玩家齐射: 命中 {directHits}，拦截 {cancelledProjectiles}，出膛 {spawnedProjectiles}。{destroyedText}";
+        return $"玩家齐射：命中 {directHits}，拦截 {cancelledProjectiles}，出膛 {spawnedProjectiles}。{destroyedText}";
     }
 
     private ShotResolution TryResolveImmediateShot(FleetSegmentState segment, int fireDirection, HashSet<HexCoord> enemyCoords, HashSet<HexCoord> enemyProjectileCoords)
@@ -661,9 +1020,31 @@ public partial class MainGameController : Node2D
         }
     }
 
-    private string FireDemoEnemies()
+    private string ResolveEnemyPhase(List<string> rewardEvents)
     {
-        var spawned = 0;
+        var summaries = new List<string>
+        {
+            MoveEnemies(),
+        };
+
+        if (_isGameOver)
+        {
+            return BuildCombatSummary(summaries);
+        }
+
+        summaries.Add(AttackEnemies());
+        if (_isGameOver)
+        {
+            return BuildCombatSummary(summaries);
+        }
+
+        summaries.Add(AdvanceProjectiles(rewardEvents));
+        return BuildCombatSummary(summaries);
+    }
+
+    private string MoveEnemies()
+    {
+        var movedSteps = 0;
 
         foreach (var enemy in _enemies)
         {
@@ -672,29 +1053,279 @@ public partial class MainGameController : Node2D
                 continue;
             }
 
-            var spawnCoord = enemy.Coord.Step(enemy.FireDirection);
-            if (!_grid.Contains(spawnCoord) || _reefCells.Contains(spawnCoord) || HasEnemyAt(spawnCoord) || HasAnyProjectileAt(spawnCoord))
+            var maxSteps = GetEnemyMoveSpeed(enemy.Type);
+            for (var stepIndex = 0; stepIndex < maxSteps; stepIndex++)
+            {
+                if (!TryGetEnemyNextStep(enemy, out var nextCoord))
+                {
+                    break;
+                }
+
+                if (_fleet.Occupies(nextCoord))
+                {
+                    _isGameOver = true;
+                    _isVictory = false;
+                    _gameOverReason = "被敌舰撞击";
+                    return $"{DescribeEnemyType(enemy.Type)}直接撞入舰队。";
+                }
+
+                enemy.Coord = nextCoord;
+                movedSteps++;
+            }
+        }
+
+        return movedSteps == 0
+            ? "敌军机动未能改变阵位。"
+            : $"敌军机动 {movedSteps} 步。";
+    }
+
+    private static int GetEnemyMoveSpeed(EnemyType type)
+    {
+        return type switch
+        {
+            EnemyType.Charger => 2,
+            EnemyType.Artillery => 1,
+            EnemyType.Splitter => 1,
+            _ => 0,
+        };
+    }
+
+    private bool TryGetEnemyNextStep(EnemyState enemy, out HexCoord nextCoord)
+    {
+        nextCoord = enemy.Coord;
+
+        switch (enemy.Type)
+        {
+            case EnemyType.Charger:
+            case EnemyType.Splitter:
+                return TryGetGreedyPlayerStep(enemy.Coord, out _, out nextCoord);
+            case EnemyType.Artillery:
+                return TryGetArtilleryMove(enemy.Coord, out _, out nextCoord);
+            default:
+                return false;
+        }
+    }
+
+    private bool TryGetGreedyPlayerStep(HexCoord origin, out int direction, out HexCoord nextCoord)
+    {
+        direction = 0;
+        nextCoord = origin;
+
+        var immediateContact = new List<(int Direction, HexCoord Coord)>();
+        var bestDistance = int.MaxValue;
+        var candidates = new List<(int Direction, HexCoord Coord)>();
+
+        for (var candidateDirection = 0; candidateDirection < HexCoord.Directions.Length; candidateDirection++)
+        {
+            var candidate = origin.Step(candidateDirection);
+            if (!_grid.Contains(candidate) || _reefCells.Contains(candidate) || _rewards.ContainsKey(candidate))
             {
                 continue;
             }
 
-            if (_fleet.Occupies(spawnCoord))
+            if (_fleet.Occupies(candidate))
             {
-                _isGameOver = true;
-                _gameOverReason = "被敌方炮火击中";
-                return "敌舰近距开火命中舰队。";
+                immediateContact.Add((candidateDirection, candidate));
+                continue;
             }
 
-            _enemyProjectiles.Add(new ProjectileState(spawnCoord, enemy.FireDirection, 1, ProjectileOwner.Enemy, false));
-            spawned++;
+            var candidateDistance = candidate.DistanceTo(_fleet.Head);
+            if (candidateDistance < bestDistance)
+            {
+                bestDistance = candidateDistance;
+                candidates.Clear();
+                candidates.Add((candidateDirection, candidate));
+            }
+            else if (candidateDistance == bestDistance)
+            {
+                candidates.Add((candidateDirection, candidate));
+            }
         }
 
-        return spawned == 0
-            ? "敌舰本回合未形成有效射线。"
-            : $"敌舰发射 {spawned} 枚炮弹。";
+        if (immediateContact.Count > 0)
+        {
+            var selected = immediateContact[_random.RandiRange(0, immediateContact.Count - 1)];
+            direction = selected.Direction;
+            nextCoord = selected.Coord;
+            return true;
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var choice = candidates[_random.RandiRange(0, candidates.Count - 1)];
+        direction = choice.Direction;
+        nextCoord = choice.Coord;
+        return true;
     }
 
-    private string AdvanceProjectiles()
+    private bool TryGetArtilleryMove(HexCoord origin, out int direction, out HexCoord nextCoord)
+    {
+        direction = 0;
+        nextCoord = origin;
+
+        var currentDistance = origin.DistanceTo(_fleet.Head);
+        if (currentDistance >= 4 && currentDistance <= 6)
+        {
+            return false;
+        }
+
+        var moveAway = currentDistance < 4;
+        var bestDistance = moveAway ? int.MinValue : int.MaxValue;
+        var candidates = new List<(int Direction, HexCoord Coord)>();
+
+        for (var candidateDirection = 0; candidateDirection < HexCoord.Directions.Length; candidateDirection++)
+        {
+            var candidate = origin.Step(candidateDirection);
+            if (!_grid.Contains(candidate) || _reefCells.Contains(candidate) || _rewards.ContainsKey(candidate) || _fleet.Occupies(candidate))
+            {
+                continue;
+            }
+
+            var candidateDistance = candidate.DistanceTo(_fleet.Head);
+            if (moveAway)
+            {
+                if (candidateDistance > bestDistance)
+                {
+                    bestDistance = candidateDistance;
+                    candidates.Clear();
+                    candidates.Add((candidateDirection, candidate));
+                }
+                else if (candidateDistance == bestDistance)
+                {
+                    candidates.Add((candidateDirection, candidate));
+                }
+            }
+            else
+            {
+                if (candidateDistance < bestDistance)
+                {
+                    bestDistance = candidateDistance;
+                    candidates.Clear();
+                    candidates.Add((candidateDirection, candidate));
+                }
+                else if (candidateDistance == bestDistance)
+                {
+                    candidates.Add((candidateDirection, candidate));
+                }
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        if ((moveAway && bestDistance <= currentDistance) || (!moveAway && bestDistance >= currentDistance))
+        {
+            return false;
+        }
+
+        var selected = candidates[_random.RandiRange(0, candidates.Count - 1)];
+        direction = selected.Direction;
+        nextCoord = selected.Coord;
+        return true;
+    }
+
+    private string AttackEnemies()
+    {
+        var spawnedProjectiles = 0;
+        var firingMines = 0;
+
+        foreach (var enemy in _enemies)
+        {
+            if (!enemy.IsAlive)
+            {
+                continue;
+            }
+
+            switch (enemy.Type)
+            {
+                case EnemyType.Artillery:
+                    var attackDirection = GetDirectionToward(enemy.Coord, GetPredictedPlayerCoord());
+                    if (TrySpawnEnemyProjectile(enemy.Coord, attackDirection, out var hitFleet))
+                    {
+                        spawnedProjectiles++;
+                    }
+
+                    if (hitFleet)
+                    {
+                        _isGameOver = true;
+                        _isVictory = false;
+                        _gameOverReason = "被敌方炮火击中";
+                        return "炮击哨近距开火命中舰队。";
+                    }
+
+                    break;
+                case EnemyType.Mine:
+                    if (!ShouldMineFireThisTurn(enemy))
+                    {
+                        continue;
+                    }
+
+                    firingMines++;
+                    for (var direction = 0; direction < HexCoord.Directions.Length; direction++)
+                    {
+                        if (TrySpawnEnemyProjectile(enemy.Coord, direction, out hitFleet))
+                        {
+                            spawnedProjectiles++;
+                        }
+
+                        if (!hitFleet)
+                        {
+                            continue;
+                        }
+
+                        _isGameOver = true;
+                        _isVictory = false;
+                        _gameOverReason = "被敌方炮火击中";
+                        return "断脊水雷齐射命中舰队。";
+                    }
+
+                    break;
+            }
+        }
+
+        if (spawnedProjectiles == 0)
+        {
+            return firingMines == 0
+                ? "敌军本回合未形成有效射线。"
+                : "敌军发动攻击，但火线被地形或占位阻断。";
+        }
+
+        return firingMines == 0
+            ? $"敌军发射 {spawnedProjectiles} 枚炮弹。"
+            : $"敌军发射 {spawnedProjectiles} 枚炮弹，其中 {firingMines} 枚来自水雷齐射。";
+    }
+
+    private bool TrySpawnEnemyProjectile(HexCoord origin, int direction, out bool hitFleet)
+    {
+        hitFleet = false;
+
+        var spawnCoord = origin.Step(direction);
+        if (!_grid.Contains(spawnCoord) || _reefCells.Contains(spawnCoord) || HasEnemyAt(spawnCoord) || HasAnyProjectileAt(spawnCoord))
+        {
+            return false;
+        }
+
+        if (_fleet.Occupies(spawnCoord))
+        {
+            hitFleet = true;
+            return false;
+        }
+
+        _enemyProjectiles.Add(new ProjectileState(spawnCoord, direction, 1, ProjectileOwner.Enemy, false));
+        return true;
+    }
+
+    private bool ShouldMineFireThisTurn(EnemyState enemy)
+    {
+        return _turnCounter >= enemy.SpawnTurn + 3 && ((_turnCounter - enemy.SpawnTurn) % 3) == 0;
+    }
+
+    private string AdvanceProjectiles(List<string> rewardEvents)
     {
         var movedPlayerProjectiles = new Dictionary<HexCoord, List<ProjectileState>>();
         var movedEnemyProjectiles = new Dictionary<HexCoord, List<ProjectileState>>();
@@ -773,6 +1404,7 @@ public partial class MainGameController : Node2D
             if (_fleet.Occupies(cell))
             {
                 _isGameOver = true;
+                _isVictory = false;
                 _gameOverReason = "被敌方炮火击中";
                 continue;
             }
@@ -783,12 +1415,12 @@ public partial class MainGameController : Node2D
             }
         }
 
-        var destroyedEnemies = RemoveDefeatedEnemies();
         if (_isGameOver)
         {
             return "敌方炮弹命中舰队。";
         }
 
+        var destroyedEnemies = ResolveDefeatedEnemies(rewardEvents);
         if (playerHits == 0 && projectileDuels == 0 && expiredProjectiles == 0 && destroyedEnemies == 0)
         {
             return "炮弹阶段未发生额外命中。";
@@ -797,7 +1429,7 @@ public partial class MainGameController : Node2D
         var destroyedText = destroyedEnemies > 0
             ? $" 击沉 {destroyedEnemies} 艘敌舰。"
             : string.Empty;
-        return $"炮弹推进: 命中 {playerHits}，对撞 {projectileDuels}，消散 {expiredProjectiles}。{destroyedText}";
+        return $"炮弹推进：命中 {playerHits}，对撞 {projectileDuels}，消散 {expiredProjectiles}。{destroyedText}";
     }
 
     private bool TryAdvanceProjectile(ProjectileState projectile, Dictionary<HexCoord, List<ProjectileState>> destination)
@@ -819,7 +1451,7 @@ public partial class MainGameController : Node2D
         return true;
     }
 
-    private int RemoveDefeatedEnemies()
+    private int ResolveDefeatedEnemies(List<string> rewardEvents)
     {
         var defeated = 0;
         for (var index = _enemies.Count - 1; index >= 0; index--)
@@ -829,11 +1461,183 @@ public partial class MainGameController : Node2D
                 continue;
             }
 
+            var enemy = _enemies[index];
             _enemies.RemoveAt(index);
             defeated++;
+
+            if (TryDropRewardAt(enemy.Coord, out var rewardType))
+            {
+                rewardEvents.Add($"{DescribeEnemyType(enemy.Type)}掉落了 {DescribeRewardType(rewardType)}。");
+            }
+
+            if (enemy.Type == EnemyType.Splitter)
+            {
+                var spawnedChildren = SpawnSplitChildren(enemy.Coord);
+                if (spawnedChildren > 0)
+                {
+                    rewardEvents.Add($"分裂冲角解体，分裂出 {spawnedChildren} 艘突击梭。");
+                }
+            }
         }
 
         return defeated;
+    }
+
+    private bool TryDropRewardAt(HexCoord origin, out RewardType rewardType)
+    {
+        rewardType = RewardType.GrowthModule;
+        if (_rewards.Count >= MaximumRewardsOnField || _random.Randf() >= 0.5f)
+        {
+            return false;
+        }
+
+        rewardType = RollRewardType();
+        return TryPlaceRewardAtOrAdjacent(origin, rewardType);
+    }
+
+    private int SpawnSplitChildren(HexCoord origin)
+    {
+        var candidates = new List<HexCoord>();
+        foreach (var cell in _grid.GetNeighbors(origin))
+        {
+            if (IsEnemySpawnCellOpen(cell))
+            {
+                candidates.Add(cell);
+            }
+        }
+
+        var spawned = 0;
+        while (spawned < 2 && candidates.Count > 0)
+        {
+            var selectedIndex = _random.RandiRange(0, candidates.Count - 1);
+            var coord = candidates[selectedIndex];
+            candidates.RemoveAt(selectedIndex);
+            _enemies.Add(new EnemyState(EnemyType.Charger, coord, _turnCounter));
+            spawned++;
+        }
+
+        return spawned;
+    }
+
+    private RewardType RollRewardType()
+    {
+        var roll = _random.RandiRange(1, 100);
+        if (roll <= 15)
+        {
+            return RewardType.GrowthModule;
+        }
+
+        if (roll <= 35)
+        {
+            return RewardType.CommandReload;
+        }
+
+        if (roll <= 65)
+        {
+            return RewardType.FirepowerUpgrade;
+        }
+
+        return RewardType.CardCalibration;
+    }
+
+    private bool TryAutoSpawnRewardForTurn(int turn, List<string> rewardEvents)
+    {
+        if ((turn % RewardAutoSpawnInterval) != 0 || _rewards.Count >= MaximumRewardsOnField)
+        {
+            return false;
+        }
+
+        if (!TrySpawnRandomReward())
+        {
+            return false;
+        }
+
+        rewardEvents.Add("海面刷新了一件新的补给。");
+        return true;
+    }
+
+    private bool TrySpawnRandomReward(int minimumDistanceFromExistingRewards = 0)
+    {
+        if (_rewards.Count >= MaximumRewardsOnField)
+        {
+            return false;
+        }
+
+        var preferred = new List<HexCoord>();
+        var fallback = new List<HexCoord>();
+        foreach (var cell in _drawOrderedCells)
+        {
+            if (!IsRewardSpawnCellOpen(cell))
+            {
+                continue;
+            }
+
+            fallback.Add(cell);
+            if (minimumDistanceFromExistingRewards <= 0 || IsFarEnoughFromRewards(cell, minimumDistanceFromExistingRewards))
+            {
+                preferred.Add(cell);
+            }
+        }
+
+        var candidates = preferred.Count > 0 ? preferred : fallback;
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var coord = candidates[_random.RandiRange(0, candidates.Count - 1)];
+        _rewards[coord] = RollRewardType();
+        return true;
+    }
+
+    private bool IsFarEnoughFromRewards(HexCoord cell, int minimumDistance)
+    {
+        foreach (var reward in _rewards.Keys)
+        {
+            if (cell.DistanceTo(reward) < minimumDistance)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool IsRewardSpawnCellOpen(HexCoord cell)
+    {
+        return _grid.Contains(cell)
+            && !_reefCells.Contains(cell)
+            && !_fleet.Occupies(cell)
+            && !HasEnemyAt(cell)
+            && !HasAnyProjectileAt(cell)
+            && !_rewards.ContainsKey(cell);
+    }
+
+    private bool TryPlaceRewardAtOrAdjacent(HexCoord origin, RewardType rewardType)
+    {
+        if (IsRewardSpawnCellOpen(origin))
+        {
+            _rewards[origin] = rewardType;
+            return true;
+        }
+
+        var candidates = new List<HexCoord>();
+        foreach (var neighbor in _grid.GetNeighbors(origin))
+        {
+            if (IsRewardSpawnCellOpen(neighbor))
+            {
+                candidates.Add(neighbor);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var coord = candidates[_random.RandiRange(0, candidates.Count - 1)];
+        _rewards[coord] = rewardType;
+        return true;
     }
 
     private EnemyState? FindEnemyAt(HexCoord coord, bool includeDefeated = false)
@@ -896,22 +1700,31 @@ public partial class MainGameController : Node2D
         }
     }
 
-    private static string BuildCombatSummary(List<string> summaries)
+    private int GetDirectionToward(HexCoord from, HexCoord target)
     {
-        var filtered = new List<string>();
-        foreach (var summary in summaries)
+        var bestDirection = 0;
+        var bestDistance = int.MaxValue;
+
+        for (var direction = 0; direction < HexCoord.Directions.Length; direction++)
         {
-            if (string.IsNullOrWhiteSpace(summary))
+            var candidateDistance = from.Step(direction).DistanceTo(target);
+            if (candidateDistance >= bestDistance)
             {
                 continue;
             }
 
-            filtered.Add(summary);
+            bestDistance = candidateDistance;
+            bestDirection = direction;
         }
 
-        return filtered.Count == 0
-            ? "本回合没有发生交火。"
-            : string.Join(" ", filtered);
+        return bestDirection;
+    }
+
+    private void ClearSelection()
+    {
+        _preview = null;
+        _selectedCard = null;
+        _selectedCardIndex = -1;
     }
 
     private void UpdateHudState()
@@ -919,6 +1732,7 @@ public partial class MainGameController : Node2D
         UpdateStatusLabel();
         UpdateHintLabel();
         UpdateCombatLabel();
+        UpdateRewardLabel();
         UpdateCardButtons();
         _confirmButton.Disabled = _isGameOver || _selectedCard == null;
     }
@@ -927,7 +1741,8 @@ public partial class MainGameController : Node2D
     {
         if (_isGameOver)
         {
-            _statusLabel.Text = $"回合 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/9\n舰队沉没: {_gameOverReason}";
+            var resultText = _isVictory ? "胜利" : "失败";
+            _statusLabel.Text = $"回合 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{resultText}: {_gameOverReason}";
             return;
         }
 
@@ -939,20 +1754,180 @@ public partial class MainGameController : Node2D
                 : $"已选择 {_selectedCard.Name}: {_selectedCard.Summary}";
         }
 
-        _statusLabel.Text = $"回合 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/9\n{detail}";
+        _statusLabel.Text = $"回合 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{detail}";
     }
 
     private void UpdateHintLabel()
     {
-        _hintLabel.Text = "当前演示实现碰撞与战斗核心。敌舰、敌弹、礁石、边界、自撞都会造成致命结果。";
+        _hintLabel.Text = "敌军会显示移动/开火意图。拾取补给会在移动中立即生效。";
+    }
+
+    private void UpdateHoverTooltip(Vector2 localMousePosition, Vector2 screenMousePosition)
+    {
+        if (!TryGetHoveredCell(localMousePosition, out var hoveredCell))
+        {
+            _hoverTooltip.Visible = false;
+            return;
+        }
+
+        var tooltipText = BuildHoverTooltipText(hoveredCell);
+        if (string.IsNullOrWhiteSpace(tooltipText))
+        {
+            _hoverTooltip.Visible = false;
+            return;
+        }
+
+        _hoverTooltipLabel.Text = tooltipText;
+        PlaceHoverTooltip(screenMousePosition);
+        _hoverTooltip.Visible = true;
+    }
+
+    private bool TryGetHoveredCell(Vector2 localMousePosition, out HexCoord hoveredCell)
+    {
+        foreach (var cell in _drawOrderedCells)
+        {
+            if (!Geometry2D.IsPointInPolygon(localMousePosition, BuildHexPoints(GetCellCenter(cell), _hexSize * 0.96f)))
+            {
+                continue;
+            }
+
+            hoveredCell = cell;
+            return true;
+        }
+
+        hoveredCell = default;
+        return false;
+    }
+
+    private string BuildHoverTooltipText(HexCoord coord)
+    {
+        var lines = new List<string>();
+
+        if (_fleet.Occupies(coord))
+        {
+            lines.Add($"我方舰队：指令卡决定航向与步数，当前长度 {_fleet.Segments.Count}。" );
+        }
+
+        var enemy = FindEnemyAt(coord);
+        if (enemy != null)
+        {
+            lines.Add(BuildEnemyTooltipLine(enemy));
+        }
+
+        AppendProjectileTooltipLines(lines, coord);
+
+        if (_rewards.TryGetValue(coord, out var rewardType))
+        {
+            lines.Add(BuildRewardTooltipLine(rewardType));
+        }
+
+        if (_reefCells.Contains(coord))
+        {
+            lines.Add("礁石：阻挡舰队移动，也会拦下炮弹。" );
+        }
+
+        if (lines.Count == 0)
+        {
+            lines.Add(_grid.IsEdge(coord)
+                ? "边缘海域：仍可航行，但再向外就会驶离战场。"
+                : "空海域：可航行，也可能成为交火路径。");
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private string BuildEnemyTooltipLine(EnemyState enemy)
+    {
+        var behavior = enemy.Type switch
+        {
+            EnemyType.Charger => "会朝舰队冲锋。",
+            EnemyType.Artillery => "会保持距离并发射炮弹。",
+            EnemyType.Mine => "会定期向六个方向齐射。",
+            EnemyType.Splitter => "被击毁后会分裂出突击梭。",
+            _ => "会威胁舰队航线。",
+        };
+
+        return $"{DescribeEnemyType(enemy.Type)}：耐久 {enemy.Health}/{enemy.MaxHealth}，{behavior}";
+    }
+
+    private void AppendProjectileTooltipLines(List<string> lines, HexCoord coord)
+    {
+        var playerProjectileCount = CountProjectilesAt(_playerProjectiles, coord);
+        if (playerProjectileCount > 0)
+        {
+            lines.Add(playerProjectileCount == 1
+                ? "己方炮弹：每回合前进 1 格，可拦截敌方炮弹。"
+                : $"己方炮弹 x{playerProjectileCount}：每回合前进 1 格，可拦截敌方炮弹。");
+        }
+
+        var enemyProjectileCount = CountProjectilesAt(_enemyProjectiles, coord);
+        if (enemyProjectileCount > 0)
+        {
+            lines.Add(enemyProjectileCount == 1
+                ? "敌方炮弹：每回合前进 1 格，命中舰队即失败。"
+                : $"敌方炮弹 x{enemyProjectileCount}：每回合前进 1 格，命中舰队即失败。");
+        }
+    }
+
+    private int CountProjectilesAt(IReadOnlyList<ProjectileState> projectiles, HexCoord coord)
+    {
+        var count = 0;
+        foreach (var projectile in projectiles)
+        {
+            if (projectile.Coord.Equals(coord))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private string BuildRewardTooltipLine(RewardType rewardType)
+    {
+        var effect = rewardType switch
+        {
+            RewardType.GrowthModule => "驶入后会让舰队增长 1 节。",
+            RewardType.CommandReload => "驶入后会立刻补满手牌。",
+            RewardType.FirepowerUpgrade => "驶入后会强化一节舰船的火力。",
+            RewardType.CardCalibration => "驶入后会提升后续抽到的指令卡步数。",
+            _ => "驶入后会立刻生效。",
+        };
+
+        return $"{DescribeRewardType(rewardType)}：{effect}";
+    }
+
+    private void PlaceHoverTooltip(Vector2 screenMousePosition)
+    {
+        _hoverTooltip.Visible = true;
+
+        var desiredPosition = screenMousePosition + new Vector2(HoverTooltipOffsetX, HoverTooltipOffsetY);
+        var tooltipSize = _hoverTooltip.GetCombinedMinimumSize();
+        var viewportSize = GetViewportRect().Size;
+
+        desiredPosition.X = Mathf.Clamp(
+            desiredPosition.X,
+            HoverTooltipViewportMargin,
+            Mathf.Max(HoverTooltipViewportMargin, viewportSize.X - tooltipSize.X - HoverTooltipViewportMargin));
+        desiredPosition.Y = Mathf.Clamp(
+            desiredPosition.Y,
+            HoverTooltipViewportMargin,
+            Mathf.Max(HoverTooltipViewportMargin, viewportSize.Y - tooltipSize.Y - HoverTooltipViewportMargin));
+
+        _hoverTooltip.Position = desiredPosition;
     }
 
     private void UpdateCombatLabel()
     {
         var playerState = _isGameOver
-            ? $"舰队状态: {_gameOverReason}"
+            ? (_isVictory ? "舰队状态: 胜利" : $"舰队状态: {_gameOverReason}")
             : "舰队状态: 作战中";
         _combatLabel.Text = $"敌舰 {_enemies.Count}  敌弹 {_enemyProjectiles.Count}  己弹 {_playerProjectiles.Count}\n{playerState}\n{_lastCombatEvent}";
+    }
+
+    private void UpdateRewardLabel()
+    {
+        _rewardLabel.Text = $"奖励 {_rewards.Count}/{MaximumRewardsOnField}  待校准 +{_pendingNextDrawCardUpgradeCount}\n{_lastRewardEvent}";
     }
 
     private void UpdateCardButtons()
@@ -1026,7 +2001,9 @@ public partial class MainGameController : Node2D
 
         _statusLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseStatusFontSize * _uiScale)));
         _hintLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_baseHintFontSize * _uiScale)));
-    _combatLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_baseCombatFontSize * _uiScale)));
+        _combatLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_baseCombatFontSize * _uiScale)));
+        _rewardLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_baseRewardFontSize * _uiScale)));
+        _hoverTooltipLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_baseHoverTooltipFontSize * _uiScale)));
 
         var confirmWidth = Mathf.Min(_baseConfirmButtonSize.X * _uiScale, viewportSize.X - (hudMargin * 2.0f));
         var confirmHeight = Mathf.Max(32.0f, _baseConfirmButtonSize.Y * _uiScale);
@@ -1095,6 +2072,28 @@ public partial class MainGameController : Node2D
         }
     }
 
+    private void DrawRewards()
+    {
+        foreach (var reward in _rewards)
+        {
+            var center = GetCellCenter(reward.Key);
+            DrawCircle(center, Mathf.Max(2.0f, _hexSize * 0.16f), new Color(0.18f, 0.12f, 0.05f, 0.36f));
+            DrawMarker(center, _hexSize * 0.58f, GetRewardColor(reward.Value), 0.0f);
+        }
+    }
+
+    private Color GetRewardColor(RewardType rewardType)
+    {
+        return rewardType switch
+        {
+            RewardType.GrowthModule => new Color(0.90f, 0.83f, 0.28f, 0.96f),
+            RewardType.CommandReload => new Color(0.88f, 0.67f, 0.21f, 0.96f),
+            RewardType.FirepowerUpgrade => new Color(1.0f, 0.55f, 0.22f, 0.96f),
+            RewardType.CardCalibration => new Color(0.93f, 0.74f, 0.31f, 0.96f),
+            _ => new Color(0.90f, 0.83f, 0.28f, 0.96f),
+        };
+    }
+
     private void DrawEnemies()
     {
         foreach (var enemy in _enemies)
@@ -1104,8 +2103,95 @@ public partial class MainGameController : Node2D
                 continue;
             }
 
-            DrawCombatIcon(enemy.Coord, 0.94f, new Color(0.90f, 0.34f, 0.28f, 0.96f), enemy.FireDirection);
-            DrawCombatIcon(enemy.Coord, 0.32f, new Color(1.0f, 1.0f, 1.0f, 0.82f), enemy.FireDirection);
+            DrawEnemyBody(enemy);
+            DrawEnemyIntent(enemy);
+        }
+    }
+
+    private void DrawEnemyBody(EnemyState enemy)
+    {
+        var center = GetCellCenter(enemy.Coord);
+        var rotation = 0.0f;
+        if (enemy.AttackIntentDirection.HasValue)
+        {
+            rotation = DirectionToAngle(enemy.AttackIntentDirection.Value);
+        }
+        else if (enemy.MoveIntentDirection.HasValue)
+        {
+            rotation = DirectionToAngle(enemy.MoveIntentDirection.Value);
+        }
+
+        DrawMarker(center, _hexSize * GetEnemyBodyScale(enemy.Type), GetEnemyColor(enemy.Type), rotation);
+        DrawEnemyHealth(enemy, center);
+    }
+
+    private float GetEnemyBodyScale(EnemyType type)
+    {
+        return type switch
+        {
+            EnemyType.Mine => 0.80f,
+            EnemyType.Splitter => 1.02f,
+            EnemyType.Artillery => 0.92f,
+            _ => 0.88f,
+        };
+    }
+
+    private Color GetEnemyColor(EnemyType type)
+    {
+        return type switch
+        {
+            EnemyType.Charger => new Color(0.90f, 0.31f, 0.29f, 0.95f),
+            EnemyType.Artillery => new Color(0.95f, 0.54f, 0.25f, 0.95f),
+            EnemyType.Mine => new Color(0.70f, 0.76f, 0.80f, 0.95f),
+            EnemyType.Splitter => new Color(0.72f, 0.24f, 0.20f, 0.95f),
+            _ => new Color(0.90f, 0.31f, 0.29f, 0.95f),
+        };
+    }
+
+    private void DrawEnemyHealth(EnemyState enemy, Vector2 center)
+    {
+        for (var pipIndex = 0; pipIndex < enemy.Health; pipIndex++)
+        {
+            var offset = new Vector2((pipIndex - ((enemy.Health - 1) * 0.5f)) * _hexSize * 0.18f, -_hexSize * 0.45f);
+            DrawCircle(center + offset, Mathf.Max(2.0f, _hexSize * 0.08f), new Color(1.0f, 0.96f, 0.90f, 0.92f));
+        }
+    }
+
+    private void DrawEnemyIntent(EnemyState enemy)
+    {
+        var center = GetCellCenter(enemy.Coord) + new Vector2(0.0f, -_hexSize * 0.78f);
+
+        if (enemy.MoveIntentDirection.HasValue)
+        {
+            DrawMarker(
+                center + new Vector2(-_hexSize * 0.24f, 0.0f),
+                _hexSize * 0.30f,
+                new Color(0.78f, 0.90f, 1.0f, 0.94f),
+                DirectionToAngle(enemy.MoveIntentDirection.Value));
+        }
+
+        if (enemy.AttackIntentDirection.HasValue)
+        {
+            DrawMarker(
+                center + new Vector2(_hexSize * 0.24f, 0.0f),
+                _hexSize * 0.32f,
+                new Color(1.0f, 0.86f, 0.44f, 0.94f),
+                DirectionToAngle(enemy.AttackIntentDirection.Value));
+        }
+
+        if (!enemy.HasRadialAttackIntent)
+        {
+            return;
+        }
+
+        for (var direction = 0; direction < HexCoord.Directions.Length; direction++)
+        {
+            var radialOffset = _grid.ToWorld(HexCoord.Directions[direction], _hexSize * 0.34f);
+            DrawMarker(
+                GetCellCenter(enemy.Coord) + radialOffset,
+                _hexSize * 0.18f,
+                new Color(1.0f, 0.92f, 0.52f, 0.88f),
+                DirectionToAngle(direction));
         }
     }
 
@@ -1237,6 +2323,63 @@ public partial class MainGameController : Node2D
         };
     }
 
+    private static string DescribeEnemyType(EnemyType type)
+    {
+        return type switch
+        {
+            EnemyType.Charger => "突击梭",
+            EnemyType.Artillery => "炮击哨",
+            EnemyType.Mine => "断脊水雷",
+            EnemyType.Splitter => "分裂冲角",
+            _ => "敌舰",
+        };
+    }
+
+    private static string DescribeRewardType(RewardType type)
+    {
+        return type switch
+        {
+            RewardType.GrowthModule => "增殖模块",
+            RewardType.CommandReload => "指令重载",
+            RewardType.FirepowerUpgrade => "火力强化",
+            RewardType.CardCalibration => "指令校准",
+            _ => "补给",
+        };
+    }
+
+    private static void AppendRewardEvents(List<string> destination, IReadOnlyList<string> source)
+    {
+        foreach (var item in source)
+        {
+            destination.Add(item);
+        }
+    }
+
+    private static string BuildRewardSummary(List<string> rewardEvents)
+    {
+        return rewardEvents.Count == 0
+            ? "本回合未发生补给变化。"
+            : string.Join(" ", rewardEvents);
+    }
+
+    private static string BuildCombatSummary(List<string> summaries)
+    {
+        var filtered = new List<string>();
+        foreach (var summary in summaries)
+        {
+            if (string.IsNullOrWhiteSpace(summary))
+            {
+                continue;
+            }
+
+            filtered.Add(summary);
+        }
+
+        return filtered.Count == 0
+            ? "本回合没有发生交火。"
+            : string.Join(" ", filtered);
+    }
+
     private enum CollisionKind
     {
         None,
@@ -1255,12 +2398,21 @@ public partial class MainGameController : Node2D
         SpawnedProjectile,
     }
 
+    private enum RewardType
+    {
+        GrowthModule,
+        CommandReload,
+        FirepowerUpgrade,
+        CardCalibration,
+    }
+
     private sealed class SimulationResult
     {
-        private SimulationResult(FleetState fleet, List<HexCoord> headPath, CollisionKind collisionKind, HexCoord? collisionCoord)
+        private SimulationResult(FleetState fleet, List<HexCoord> headPath, List<string> rewardEvents, CollisionKind collisionKind, HexCoord? collisionCoord)
         {
             Fleet = fleet.Clone();
             HeadPath = headPath.AsReadOnly();
+            RewardEvents = rewardEvents.AsReadOnly();
             CollisionKind = collisionKind;
             CollisionCoord = collisionCoord;
         }
@@ -1269,20 +2421,22 @@ public partial class MainGameController : Node2D
 
         public IReadOnlyList<HexCoord> HeadPath { get; }
 
+        public IReadOnlyList<string> RewardEvents { get; }
+
         public CollisionKind CollisionKind { get; }
 
         public HexCoord? CollisionCoord { get; }
 
         public bool IsFatal => CollisionKind != CollisionKind.None;
 
-        public static SimulationResult Success(FleetState fleet, List<HexCoord> headPath)
+        public static SimulationResult Success(FleetState fleet, List<HexCoord> headPath, List<string> rewardEvents)
         {
-            return new SimulationResult(fleet, headPath, CollisionKind.None, null);
+            return new SimulationResult(fleet, headPath, rewardEvents, CollisionKind.None, null);
         }
 
-        public static SimulationResult Fatal(FleetState fleet, List<HexCoord> headPath, CollisionKind collisionKind, HexCoord collisionCoord)
+        public static SimulationResult Fatal(FleetState fleet, List<HexCoord> headPath, List<string> rewardEvents, CollisionKind collisionKind, HexCoord collisionCoord)
         {
-            return new SimulationResult(fleet, headPath, collisionKind, collisionCoord);
+            return new SimulationResult(fleet, headPath, rewardEvents, collisionKind, collisionCoord);
         }
     }
 }

@@ -83,17 +83,18 @@ public sealed class FleetState
         return false;
     }
 
-    public void AddSegment(HexGrid grid)
+    public bool TryAddSegment(HexGrid grid, Func<HexCoord, bool>? isBlocked = null)
     {
         var tailIndex = _segments.Count - 1;
         var tail = _segments[tailIndex];
         var preferredDirection = HexCoord.WrapDirection(tail.EntryDirection + 3);
+        isBlocked ??= static _ => false;
 
         for (var offset = 0; offset < HexCoord.Directions.Length; offset++)
         {
             var direction = HexCoord.WrapDirection(preferredDirection + offset);
             var candidate = tail.Coord.Step(direction);
-            if (!grid.Contains(candidate) || Occupies(candidate))
+            if (!grid.Contains(candidate) || Occupies(candidate) || isBlocked(candidate))
             {
                 continue;
             }
@@ -103,10 +104,10 @@ public sealed class FleetState
                 EntryDirection = tail.EntryDirection,
             };
             _segments.Add(newSegment);
-            return;
+            return true;
         }
 
-        throw new InvalidOperationException("Unable to place a new fleet segment.");
+        return false;
     }
 }
 
