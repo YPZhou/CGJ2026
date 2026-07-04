@@ -94,6 +94,11 @@ public sealed class AnimationManager
 
     public void EnqueueCannonFire(Vector2 worldPos, int direction, float duration, float radius, Color tint, object? entityKey, int segmentIndex)
     {
+        EnqueueCannonFire(worldPos, new[] { direction }, duration, radius, tint, entityKey, segmentIndex);
+    }
+
+    public void EnqueueCannonFire(Vector2 worldPos, IReadOnlyList<int> fireDirections, float duration, float radius, Color tint, object? entityKey, int segmentIndex)
+    {
         _queue.Enqueue(new AnimationEvent
         {
             Kind = AnimKind.CannonFire,
@@ -101,9 +106,34 @@ public sealed class AnimationManager
             WorldPosition = worldPos,
             Radius = radius,
             Tint = tint,
-            Direction = direction,
+            Direction = fireDirections.Count > 0 ? fireDirections[0] : 0,
+            FireDirections = new List<int>(fireDirections),
             CannonEntityKey = entityKey,
             SegmentIndex = segmentIndex,
+        });
+    }
+
+    public void EnqueueCannonFireBatch(IReadOnlyList<AnimationEvent> fireEvents)
+    {
+        if (fireEvents.Count == 0)
+        {
+            return;
+        }
+
+        var duration = 0.0f;
+        var batch = new List<AnimationEvent>(fireEvents.Count);
+
+        foreach (var fireEvent in fireEvents)
+        {
+            batch.Add(fireEvent);
+            duration = Mathf.Max(duration, fireEvent.Duration);
+        }
+
+        _queue.Enqueue(new AnimationEvent
+        {
+            Kind = AnimKind.CannonFire,
+            Duration = duration,
+            BatchedEvents = batch,
         });
     }
 
@@ -173,7 +203,7 @@ public sealed class AnimationManager
                 var effect = _effects[index];
                 if (effect.RecoilEntityKey != null)
                 {
-                    var recoilOffset = CalculateRecoilOffset(effect.Direction, effect.Progress);
+                    var recoilOffset = CalculateRecoilOffset(effect.FireDirections, effect.Direction, effect.Progress);
                     _coordinator.SetOverride(effect.RecoilEntityKey, effect.Position + recoilOffset);
                 }
             }
@@ -227,8 +257,10 @@ public sealed class AnimationManager
             case AnimKind.Flash:
             case AnimKind.Explosion:
             case AnimKind.Pickup:
-            case AnimKind.CannonFire:
                 SpawnEffect(_current);
+                break;
+            case AnimKind.CannonFire:
+                SpawnCannonFireEffects(_current);
                 break;
         }
 
@@ -333,9 +365,24 @@ public sealed class AnimationManager
         RedrawRequested?.Invoke();
     }
 
+    private void SpawnCannonFireEffects(AnimationEvent anim)
+    {
+        if (anim.BatchedEvents == null)
+        {
+            SpawnEffect(anim);
+            return;
+        }
+
+        foreach (var fireEvent in anim.BatchedEvents)
+        {
+            SpawnEffect(fireEvent);
+        }
+    }
+
     private void SpawnEffect(AnimationEvent anim)
     {
         var cannonKey = anim.Kind == AnimKind.CannonFire ? GetCannonEntityKey(anim) : null;
+        var fireDirections = anim.FireDirections ?? new List<int>();
 
         _effects.Add(new ActiveEffect
         {
@@ -346,12 +393,13 @@ public sealed class AnimationManager
             Tint = anim.Tint,
             FloatingText = anim.FloatingText,
             Direction = anim.Direction,
+            FireDirections = fireDirections,
             RecoilEntityKey = cannonKey,
         });
 
         if (cannonKey != null)
         {
-            var recoilOffset = CalculateRecoilOffset(anim.Direction, 0f);
+            var recoilOffset = CalculateRecoilOffset(fireDirections, anim.Direction, 0f);
             _coordinator.SetOverride(cannonKey, anim.WorldPosition + recoilOffset);
         }
 
@@ -373,9 +421,29 @@ public sealed class AnimationManager
         return null;
     }
 
-    private Vector2 CalculateRecoilOffset(int direction, float progress)
+    private Vector2 CalculateRecoilOffset(IReadOnlyList<int> fireDirections, int fallbackDirection, float progress)
     {
-        var directionVector = HexDirectionToVector(direction);
+        var directionVector = Vector2.Zero;
+
+        if (fireDirections.Count == 0)
+        {
+            directionVector = HexDirectionToVector(fallbackDirection);
+        }
+        else
+        {
+            foreach (var direction in fireDirections)
+            {
+                directionVector += HexDirectionToVector(direction);
+            }
+
+            if (directionVector.LengthSquared() <= 0.0001f)
+            {
+                return Vector2.Zero;
+            }
+
+            directionVector = directionVector.Normalized();
+        }
+
         var maxRecoil = _getHexSize() * 0.2f;
 
         float recoilFraction;

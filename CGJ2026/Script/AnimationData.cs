@@ -37,8 +37,9 @@ public sealed class ActiveEffect
     public float Duration;
     public float Radius;
     public Color Tint;
-    public string FloatingText;
+    public string FloatingText = string.Empty;
     public int Direction;
+    public List<int> FireDirections = new();
     public object? RecoilEntityKey;
 
     public float Progress => Mathf.Clamp(Elapsed / Duration, 0.0f, 1.0f);
@@ -50,6 +51,7 @@ public sealed class AnimationEvent
 {
     public AnimKind Kind;
     public float Duration;
+    public int FireBatchGroup;
     public FleetStepAnim? FleetStep;
     public Vector2 WorldPosition;
     public float Radius;
@@ -57,6 +59,8 @@ public sealed class AnimationEvent
     public string FloatingText = string.Empty;
     public List<EntityMove>? EntityMoves;
     public int Direction;
+    public List<int>? FireDirections;
     public object? CannonEntityKey;
     public int SegmentIndex = -1;
+    public List<AnimationEvent>? BatchedEvents;
 }
