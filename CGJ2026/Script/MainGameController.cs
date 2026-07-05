@@ -76,6 +76,8 @@ public partial class MainGameController : Node2D
     private Texture2D _forwardInstructionTexture = null!;
     private Texture2D _leftTurnInstructionTexture = null!;
     private Texture2D _rightTurnInstructionTexture = null!;
+    private Texture2D _playerBoatTexture = null!;
+    private Texture2D _playerHeadBoatTexture = null!;
     private Texture2D _growthModuleTexture = null!;
     private Texture2D _commandReloadTexture = null!;
     private Texture2D _firepowerUpgradeTexture = null!;
@@ -167,6 +169,8 @@ public partial class MainGameController : Node2D
         _forwardInstructionTexture = GD.Load<Texture2D>("res://Art/Forward.png");
         _leftTurnInstructionTexture = GD.Load<Texture2D>("res://Art/LeftTurn.png");
         _rightTurnInstructionTexture = GD.Load<Texture2D>("res://Art/RightTurn.png");
+        _playerBoatTexture = GD.Load<Texture2D>("res://Art/Boat.png");
+        _playerHeadBoatTexture = GD.Load<Texture2D>("res://Art/HeadBoat.png");
         _growthModuleTexture = GD.Load<Texture2D>("res://Art/BonusIncreaseBoat.png");
         _commandReloadTexture = GD.Load<Texture2D>("res://Art/BonusRefreshInstruction.png");
         _firepowerUpgradeTexture = GD.Load<Texture2D>("res://Art/BonusPowerUp.png");
@@ -773,6 +777,7 @@ public partial class MainGameController : Node2D
         }
 
         ClearSelection();
+        _isUserPaused = false;
         RefreshEnemyIntents();
         UpdateHudState();
         QueueRedraw();
@@ -3985,7 +3990,7 @@ public partial class MainGameController : Node2D
             }
 
             var segment = _fleet.Segments[index];
-            DrawMarker(center, _hexSize * 0.95f, new Color(0.38f, 0.72f, 0.96f, 1.0f), 0.0f);
+            DrawPlayerFleetMarker(center, isHead: false, scale: 2f, alpha: 1.0f);
             DrawDirectionIndicator(center, segment.EntryDirection, new Color(1.0f, 1.0f, 1.0f, 0.9f));
         }
 
@@ -4000,9 +4005,8 @@ public partial class MainGameController : Node2D
             return;
         }
 
-        var rotation = DirectionToAngle(_fleet.HeadDirection);
-        DrawMarker(headCenter, _hexSize * 1.08f, new Color(1.0f, 0.78f, 0.25f, 1.0f), rotation);
-        DrawDirectionIndicator(headCenter, _fleet.HeadDirection, new Color(0.12f, 0.16f, 0.24f, 1.0f));
+        DrawPlayerFleetMarker(headCenter, isHead: true, scale: 2f, alpha: 1.0f);
+        DrawDirectionIndicator(headCenter, _fleet.HeadDirection, new Color(1.0f, 1.0f, 1.0f, 1.0f));
     }
 
     private void DrawActiveEffects()
@@ -4114,24 +4118,15 @@ public partial class MainGameController : Node2D
             var segment = fleet.Segments[index];
             var segmentKey = $"fleet_{index}";
             var center = _coordinator.GetPosition(segmentKey);
-            var tint = isGhost
-                ? new Color(0.65f, 0.85f, 1.0f, alpha)
-                : new Color(0.38f, 0.72f, 0.96f, alpha);
-
-            DrawMarker(center, _hexSize * 0.95f, tint, 0.0f);
+            DrawPlayerFleetMarker(center, isHead: false, scale: 0.95f, alpha);
             DrawDirectionIndicator(center, segment.EntryDirection, new Color(1.0f, 1.0f, 1.0f, alpha * 0.9f));
         }
 
         var head = fleet.Segments[0];
         var headKey = "fleet_0";
         var headCenter = _coordinator.GetPosition(headKey);
-        var headTint = isGhost
-            ? new Color(1.0f, 0.84f, 0.39f, alpha)
-            : new Color(1.0f, 0.78f, 0.25f, alpha);
-        var rotation = DirectionToAngle(fleet.HeadDirection);
-
-        DrawMarker(headCenter, _hexSize * 1.08f, headTint, rotation);
-        DrawDirectionIndicator(headCenter, fleet.HeadDirection, new Color(0.12f, 0.16f, 0.24f, alpha));
+        DrawPlayerFleetMarker(headCenter, isHead: true, scale: 1.08f, alpha);
+        DrawDirectionIndicator(headCenter, fleet.HeadDirection, new Color(1.0f, 1.0f, 1.0f, alpha));
     }
 
     private Vector2 GetCellCenter(HexCoord coord)
@@ -4158,6 +4153,12 @@ public partial class MainGameController : Node2D
             var nextIndex = (index + 1) % points.Length;
             DrawLine(points[index], points[nextIndex], color, width, true);
         }
+    }
+
+    private void DrawPlayerFleetMarker(Vector2 center, bool isHead, float scale, float alpha)
+    {
+        var texture = isHead ? _playerHeadBoatTexture : _playerBoatTexture;
+        DrawMarker(center, _hexSize * scale, new Color(1.0f, 1.0f, 1.0f, alpha), 0.0f, texture);
     }
 
     private void DrawMarker(Vector2 center, float pixelSize, Color tint, float rotationRadians, Texture2D? texture = null)
