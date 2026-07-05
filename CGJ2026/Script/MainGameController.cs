@@ -103,6 +103,10 @@ public partial class MainGameController : Node2D
     private int _rightPoolUpgrades;
     private float _hexSize = 16.0f;
     private Vector2 _cameraPanOffset;
+    private float _cameraZoom = 1.0f;
+    private const float ZoomMin = 0.4f;
+    private const float ZoomMax = 3.0f;
+    private const float ZoomStep = 0.1f;
     private Vector2 _boardOrigin;
     private Vector2 _baseBoundsMin;
     private Vector2 _baseBoundsMax;
@@ -233,6 +237,21 @@ public partial class MainGameController : Node2D
         if (@event is InputEventMouseButton mouseButton && mouseButton.ButtonIndex == MouseButton.Left && mouseButton.Pressed)
         {
             _isDraggingCamera = true;
+        }
+
+        if (@event is InputEventMouseButton scroll && (scroll.ButtonIndex == MouseButton.WheelDown || scroll.ButtonIndex == MouseButton.WheelUp))
+        {
+            float oldZoom = _cameraZoom;
+            float direction = scroll.ButtonIndex == MouseButton.WheelUp ? 1.0f : -1.0f;
+            _cameraZoom = Mathf.Clamp(_cameraZoom + direction * ZoomStep, ZoomMin, ZoomMax);
+
+            if (Mathf.Abs(_cameraZoom - oldZoom) > 0.0001f)
+            {
+                Vector2 viewportCenter = GetViewportRect().Size * 0.5f;
+                Vector2 mousePos = scroll.GlobalPosition;
+                _cameraPanOffset += (mousePos - viewportCenter) * (1.0f / oldZoom - 1.0f / _cameraZoom);
+                RefreshCameraPosition();
+            }
         }
     }
 
@@ -369,6 +388,7 @@ public partial class MainGameController : Node2D
         _isUserPaused = false;
         _isDraggingCamera = false;
         _cameraPanOffset = Vector2.Zero;
+        _cameraZoom = 1.0f;
         _pendingCardSelectionIndex = -1;
         _pendingPlayerProjectiles.Clear();
         _pendingEnemyProjectiles.Clear();
@@ -3722,6 +3742,7 @@ public partial class MainGameController : Node2D
     private void RefreshCameraPosition()
     {
         _boardCamera.Position = (GetViewportRect().Size * 0.5f) + _cameraPanOffset;
+        _boardCamera.Zoom = Vector2.One * _cameraZoom;
     }
 
     private void OnViewportSizeChanged()
