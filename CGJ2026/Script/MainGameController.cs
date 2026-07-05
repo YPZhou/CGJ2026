@@ -12,6 +12,7 @@ public partial class MainGameController : Node2D
     private const int MaximumReefSize = 3;
     private const int ReefSafeDistance = 3;
     private const int MaximumRewardsOnField = 3;
+    private const int RewardSpawnMinimumBoundaryDistance = 2;
     private const int RewardAutoSpawnInterval = 6;
     private const int FleetLengthGoal = 9;
     private const int MaximumRange = 6;
@@ -66,10 +67,15 @@ public partial class MainGameController : Node2D
     private readonly List<ProjectileState> _pendingPlayerProjectiles = new();
     private readonly List<ProjectileState> _pendingEnemyProjectiles = new();
     private readonly Dictionary<HexCoord, RewardType> _rewards = new();
+    private readonly Dictionary<HexCoord, Texture2D> _reefTexturesByCell = new();
 
     private Texture2D _placeholder = null!;
     private Texture2D _seaGridTexture = null!;
     private Texture2D _reefTexture = null!;
+    private Texture2D _reefTextureAlt = null!;
+    private Texture2D _forwardInstructionTexture = null!;
+    private Texture2D _leftTurnInstructionTexture = null!;
+    private Texture2D _rightTurnInstructionTexture = null!;
     private Texture2D _growthModuleTexture = null!;
     private Texture2D _commandReloadTexture = null!;
     private Texture2D _firepowerUpgradeTexture = null!;
@@ -89,6 +95,7 @@ public partial class MainGameController : Node2D
     private string _lastCombatEvent = string.Empty;
     private string _lastRewardEvent = string.Empty;
     private int _turnCounter = 1;
+    private int? _pendingGrowthModuleRespawnTurn;
     private int _straightPoolUpgrades;
     private int _leftPoolUpgrades;
     private int _rightPoolUpgrades;
@@ -156,6 +163,10 @@ public partial class MainGameController : Node2D
         _placeholder = GD.Load<Texture2D>("res://icon.svg");
         _seaGridTexture = GD.Load<Texture2D>("res://Art/SeaGrid.png");
         _reefTexture = GD.Load<Texture2D>("res://Art/Rock.png");
+        _reefTextureAlt = GD.Load<Texture2D>("res://Art/Rock2.png");
+        _forwardInstructionTexture = GD.Load<Texture2D>("res://Art/Forward.png");
+        _leftTurnInstructionTexture = GD.Load<Texture2D>("res://Art/LeftTurn.png");
+        _rightTurnInstructionTexture = GD.Load<Texture2D>("res://Art/RightTurn.png");
         _growthModuleTexture = GD.Load<Texture2D>("res://Art/BonusIncreaseBoat.png");
         _commandReloadTexture = GD.Load<Texture2D>("res://Art/BonusRefreshInstruction.png");
         _firepowerUpgradeTexture = GD.Load<Texture2D>("res://Art/BonusPowerUp.png");
@@ -405,6 +416,13 @@ public partial class MainGameController : Node2D
 
         _fleet = fleet;
         _reefCells = reefs;
+        _reefTexturesByCell.Clear();
+        foreach (var reef in _reefCells)
+        {
+            _reefTexturesByCell[reef] = _random.Randf() < 0.5f
+                ? _reefTexture
+                : _reefTextureAlt;
+        }
         _enemies.Clear();
         _playerProjectiles.Clear();
         _enemyProjectiles.Clear();
@@ -414,6 +432,7 @@ public partial class MainGameController : Node2D
         _leftPoolUpgrades = 0;
         _rightPoolUpgrades = 0;
         _turnCounter = 1;
+        _pendingGrowthModuleRespawnTurn = null;
         _isGameOver = false;
         _isVictory = false;
         _gameOverReason = string.Empty;
@@ -526,7 +545,7 @@ public partial class MainGameController : Node2D
 
     private void SpawnInitialRewards()
     {
-        TrySpawnRandomReward(minimumDistanceFromExistingRewards: 0);
+        TrySpawnRandomReward(minimumDistanceFromExistingRewards: 0, forcedRewardType: RewardType.GrowthModule);
         TrySpawnRandomReward(minimumDistanceFromExistingRewards: 4);
     }
 
@@ -644,6 +663,35 @@ public partial class MainGameController : Node2D
     {
         var edgeDistance = Math.Max(Math.Abs(cell.Q), Math.Max(Math.Abs(cell.R), Math.Abs(cell.S)));
         return _grid.Radius - edgeDistance;
+    }
+
+    private bool HasGrowthModuleOnField()
+    {
+        foreach (var rewardType in _rewards.Values)
+        {
+            if (rewardType == RewardType.GrowthModule)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool CanAddReward(RewardType rewardType)
+    {
+        if (rewardType == RewardType.GrowthModule && HasGrowthModuleOnField())
+        {
+            return false;
+        }
+
+        var rewardLimit = MaximumRewardsOnField;
+        if (rewardType != RewardType.GrowthModule && _pendingGrowthModuleRespawnTurn.HasValue)
+        {
+            rewardLimit--;
+        }
+
+        return _rewards.Count < rewardLimit;
     }
 
     private void FillHand()
@@ -893,9 +941,6 @@ public partial class MainGameController : Node2D
         var advance = ResolvePlayerAdvance(stagedFleet);
         stagedFleet.HeadDirection = advance.Direction;
         var collision = CheckHeadEntry(advance.Coord, _fleet);
-        var pickupRewardType = collision == CollisionKind.None && _rewards.TryGetValue(advance.Coord, out var rewardType)
-            ? rewardType
-            : (RewardType?)null;
         var moveAnimation = BuildFleetStepAnimation(stagedFleet, advance.Coord);
 
         stagedFleet.MoveOneStep(advance.Coord, _grid);
@@ -904,7 +949,13 @@ public partial class MainGameController : Node2D
             collision = CollisionKind.Self;
         }
 
-        return new PlayerMovementStep(stagedFleet, advance.Coord, collision, pickupRewardType, moveAnimation);
+        IReadOnlyList<KeyValuePair<HexCoord, RewardType>> pickupRewards = Array.Empty<KeyValuePair<HexCoord, RewardType>>();
+        if (collision == CollisionKind.None)
+        {
+            pickupRewards = GetRewardPickups(stagedFleet.Head, _rewards);
+        }
+
+        return new PlayerMovementStep(stagedFleet, advance.Coord, collision, pickupRewards, moveAnimation);
     }
 
     private void CommitRealtimePlayerMovementStep(PlayerMovementStep step)
@@ -920,11 +971,10 @@ public partial class MainGameController : Node2D
             return;
         }
 
-        if (step.PickupRewardType.HasValue)
+        if (step.PickupRewards.Count > 0)
         {
             var rewardEvents = new List<string>();
-            _rewards.Remove(step.NextHead);
-            ApplyRewardPickup(_fleet, step.PickupRewardType.Value, previewOnly: false, rewardEvents, _rewards);
+            ApplyRewardPickups(_fleet, step.PickupRewards, previewOnly: false, rewardEvents, _rewards);
             _lastRewardEvent = BuildRewardSummary(rewardEvents);
         }
 
@@ -1429,9 +1479,6 @@ public partial class MainGameController : Node2D
         var advance = ResolvePlayerAdvance(stagedFleet);
         stagedFleet.HeadDirection = advance.Direction;
         var collision = CheckHeadEntry(advance.Coord, _fleet);
-        var pickupRewardType = collision == CollisionKind.None && _rewards.TryGetValue(advance.Coord, out var rewardType)
-            ? rewardType
-            : (RewardType?)null;
         var moveAnimation = BuildFleetStepAnimation(stagedFleet, advance.Coord);
 
         stagedFleet.MoveOneStep(advance.Coord, _grid);
@@ -1440,7 +1487,13 @@ public partial class MainGameController : Node2D
             collision = CollisionKind.Self;
         }
 
-        return new PlayerMovementStep(stagedFleet, advance.Coord, collision, pickupRewardType, moveAnimation);
+        IReadOnlyList<KeyValuePair<HexCoord, RewardType>> pickupRewards = Array.Empty<KeyValuePair<HexCoord, RewardType>>();
+        if (collision == CollisionKind.None)
+        {
+            pickupRewards = GetRewardPickups(stagedFleet.Head, _rewards);
+        }
+
+        return new PlayerMovementStep(stagedFleet, advance.Coord, collision, pickupRewards, moveAnimation);
     }
 
     private void CommitPlayerMovementStep(PlayerMovementStep step)
@@ -1464,17 +1517,17 @@ public partial class MainGameController : Node2D
             return;
         }
 
-        if (!step.PickupRewardType.HasValue)
+        if (step.PickupRewards.Count == 0)
         {
             ContinuePlayerMovementStep();
             return;
         }
 
-        _rewards.Remove(step.NextHead);
-        ApplyRewardPickup(_fleet, step.PickupRewardType.Value, previewOnly: false, _activeTurn.RewardEvents, _rewards);
+        var pickupAnimations = new List<AnimationEvent>();
+        ApplyRewardPickups(_fleet, step.PickupRewards, previewOnly: false, _activeTurn.RewardEvents, _rewards, pickupAnimations);
 
         PlayAnimationBatch(
-            new List<AnimationEvent> { BuildPickupAnimation(step.NextHead, step.PickupRewardType.Value) },
+            pickupAnimations,
             ContinuePlayerMovementStep);
     }
 
@@ -1869,24 +1922,6 @@ public partial class MainGameController : Node2D
                 return SimulationResult.Fatal(simulated, headPath, rewardEvents, collision, advance.Coord);
             }
 
-            var rewardAtStep = rewardMap.TryGetValue(advance.Coord, out var rewardType);
-            if (rewardAtStep)
-            {
-                rewardMap.Remove(advance.Coord);
-                ApplyRewardPickup(simulated, rewardType, previewOnly, rewardEvents, rewardMap);
-
-                if (animEvents != null)
-                {
-                    animEvents.Add(new AnimationEvent
-                    {
-                        Kind = AnimKind.Pickup,
-                        Duration = 0.6f,
-                        WorldPosition = GetCellCenter(advance.Coord),
-                        FloatingText = DescribeRewardType(rewardType),
-                    });
-                }
-            }
-
             if (animEvents != null)
             {
                 RecordFleetStepAnimation(simulated, advance.Coord, animEvents);
@@ -1897,6 +1932,8 @@ public partial class MainGameController : Node2D
             {
                 return SimulationResult.Fatal(simulated, headPath, rewardEvents, CollisionKind.Self, advance.Coord);
             }
+
+            ApplyRewardPickups(simulated, GetRewardPickups(simulated.Head, rewardMap), previewOnly, rewardEvents, rewardMap, animEvents);
         }
 
         return SimulationResult.Success(simulated, headPath, rewardEvents);
@@ -1944,6 +1981,49 @@ public partial class MainGameController : Node2D
         };
     }
 
+    private IEnumerable<HexCoord> EnumerateRewardPickupArea(HexCoord center)
+    {
+        yield return center;
+
+        foreach (var neighbor in _grid.GetNeighbors(center))
+        {
+            yield return neighbor;
+        }
+    }
+
+    private List<KeyValuePair<HexCoord, RewardType>> GetRewardPickups(HexCoord center, IDictionary<HexCoord, RewardType> rewardMap)
+    {
+        var pickups = new List<KeyValuePair<HexCoord, RewardType>>();
+        foreach (var cell in EnumerateRewardPickupArea(center))
+        {
+            if (rewardMap.TryGetValue(cell, out var rewardType))
+            {
+                pickups.Add(new KeyValuePair<HexCoord, RewardType>(cell, rewardType));
+            }
+        }
+
+        return pickups;
+    }
+
+    private void ApplyRewardPickups(FleetState fleet, IReadOnlyList<KeyValuePair<HexCoord, RewardType>> pickups,
+        bool previewOnly, List<string> rewardEvents, IDictionary<HexCoord, RewardType> rewardMap,
+        List<AnimationEvent>? pickupAnimations = null)
+    {
+        foreach (var pickup in pickups)
+        {
+            rewardMap.Remove(pickup.Key);
+        }
+
+        foreach (var pickup in pickups)
+        {
+            ApplyRewardPickup(fleet, pickup.Value, previewOnly, rewardEvents, rewardMap);
+            if (pickupAnimations != null)
+            {
+                pickupAnimations.Add(BuildPickupAnimation(pickup.Key, pickup.Value));
+            }
+        }
+    }
+
     private void ApplyRewardPickup(FleetState fleet, RewardType rewardType, bool previewOnly, List<string> rewardEvents, IDictionary<HexCoord, RewardType> rewardMap)
     {
         if (previewOnly)
@@ -1954,6 +2034,11 @@ public partial class MainGameController : Node2D
             }
 
             return;
+        }
+
+        if (rewardType == RewardType.GrowthModule)
+        {
+            _pendingGrowthModuleRespawnTurn = _turnCounter + 1;
         }
 
         switch (rewardType)
@@ -2937,12 +3022,12 @@ public partial class MainGameController : Node2D
     private bool TryDropRewardAt(HexCoord origin, out RewardType rewardType)
     {
         rewardType = RewardType.GrowthModule;
-        if (_rewards.Count >= MaximumRewardsOnField || _random.Randf() >= 0.5f)
+        if (_random.Randf() >= 0.5f)
         {
             return false;
         }
 
-        rewardType = RollRewardType();
+        rewardType = RollRewardTypeForSpawn();
         return TryPlaceRewardAtOrAdjacent(origin, rewardType);
     }
 
@@ -2991,25 +3076,55 @@ public partial class MainGameController : Node2D
         return RewardType.CardCalibration;
     }
 
+    private RewardType RollRewardTypeForSpawn()
+    {
+        if (!HasGrowthModuleOnField() && !_pendingGrowthModuleRespawnTurn.HasValue)
+        {
+            return RollRewardType();
+        }
+
+        while (true)
+        {
+            var rewardType = RollRewardType();
+            if (rewardType != RewardType.GrowthModule)
+            {
+                return rewardType;
+            }
+        }
+    }
+
     private bool TryAutoSpawnRewardForTurn(int turn, List<string> rewardEvents)
     {
-        if ((turn % RewardAutoSpawnInterval) != 0 || _rewards.Count >= MaximumRewardsOnField)
+        var spawnedReward = false;
+
+        if (_pendingGrowthModuleRespawnTurn.HasValue && turn >= _pendingGrowthModuleRespawnTurn.Value)
         {
-            return false;
+            if (TrySpawnRandomReward(forcedRewardType: RewardType.GrowthModule))
+            {
+                _pendingGrowthModuleRespawnTurn = null;
+                rewardEvents.Add("海面刷新了一件新的增殖模块。");
+                spawnedReward = true;
+            }
+        }
+
+        if ((turn % RewardAutoSpawnInterval) != 0)
+        {
+            return spawnedReward;
         }
 
         if (!TrySpawnRandomReward())
         {
-            return false;
+            return spawnedReward;
         }
 
         rewardEvents.Add("海面刷新了一件新的补给。");
         return true;
     }
 
-    private bool TrySpawnRandomReward(int minimumDistanceFromExistingRewards = 0)
+    private bool TrySpawnRandomReward(int minimumDistanceFromExistingRewards = 0, RewardType? forcedRewardType = null)
     {
-        if (_rewards.Count >= MaximumRewardsOnField)
+        var rewardType = forcedRewardType ?? RollRewardTypeForSpawn();
+        if (!CanAddReward(rewardType))
         {
             return false;
         }
@@ -3037,7 +3152,7 @@ public partial class MainGameController : Node2D
         }
 
         var coord = candidates[_random.RandiRange(0, candidates.Count - 1)];
-        _rewards[coord] = RollRewardType();
+        _rewards[coord] = rewardType;
         return true;
     }
 
@@ -3057,6 +3172,7 @@ public partial class MainGameController : Node2D
     private bool IsRewardSpawnCellOpen(HexCoord cell)
     {
         return _grid.Contains(cell)
+            && GetBoundaryDistance(cell) >= RewardSpawnMinimumBoundaryDistance
             && !_reefCells.Contains(cell)
             && !_fleet.Occupies(cell)
             && !HasEnemyAt(cell)
@@ -3066,6 +3182,11 @@ public partial class MainGameController : Node2D
 
     private bool TryPlaceRewardAtOrAdjacent(HexCoord origin, RewardType rewardType)
     {
+        if (!CanAddReward(rewardType))
+        {
+            return false;
+        }
+
         if (IsRewardSpawnCellOpen(origin))
         {
             _rewards[origin] = rewardType;
@@ -3421,11 +3542,11 @@ public partial class MainGameController : Node2D
     {
         var effect = rewardType switch
         {
-            RewardType.GrowthModule => "驶入后会让舰队增长 1 节。",
-            RewardType.CommandReload => "驶入后会立刻补满手牌。",
-            RewardType.FirepowerUpgrade => "驶入后会强化一节舰船的火力。",
-            RewardType.CardCalibration => "驶入后会立刻获得 3 秒加速。",
-            _ => "驶入后会立刻生效。",
+            RewardType.GrowthModule => "进入奖励格或其相邻格后会让舰队增长 1 节。",
+            RewardType.CommandReload => "进入奖励格或其相邻格后会立刻补满手牌。",
+            RewardType.FirepowerUpgrade => "进入奖励格或其相邻格后会强化一节舰船的火力。",
+            RewardType.CardCalibration => "进入奖励格或其相邻格后会立刻获得 3 秒加速。",
+            _ => "进入奖励格或其相邻格后会立刻生效。",
         };
 
         return $"{DescribeRewardType(rewardType)}：{effect}";
@@ -3481,7 +3602,12 @@ public partial class MainGameController : Node2D
             var card = _hand[index];
             button.Visible = true;
             button.Disabled = _isGameOver;
-            button.Icon = _placeholder;
+            button.Icon = card.TurnDelta switch
+            {
+                0 => _forwardInstructionTexture,
+                < 0 => _leftTurnInstructionTexture,
+                _ => _rightTurnInstructionTexture,
+            };
             button.Text = BuildCardLabel(card, isSelected: index == _selectedCardIndex);
             button.Modulate = index == _selectedCardIndex
                 ? new Color(1.0f, 0.92f, 0.75f, 1.0f)
@@ -3626,12 +3752,35 @@ public partial class MainGameController : Node2D
         foreach (var reef in _reefCells)
         {
             var center = GetCellCenter(reef);
-            DrawMarker(center, _hexSize * 1.15f, Colors.White, 0.0f, _reefTexture);
+            var texture = _reefTexturesByCell.TryGetValue(reef, out var selectedTexture)
+                ? selectedTexture
+                : _reefTexture;
+            DrawMarker(center, _hexSize * 1.15f, Colors.White, 0.0f, texture);
         }
     }
 
     private void DrawRewards()
     {
+        var pickableCells = new HashSet<HexCoord>();
+        foreach (var rewardCoord in _rewards.Keys)
+        {
+            foreach (var cell in EnumerateRewardPickupArea(rewardCoord))
+            {
+                if (_grid.Contains(cell))
+                {
+                    pickableCells.Add(cell);
+                }
+            }
+        }
+
+        foreach (var cell in pickableCells)
+        {
+            DrawHexOutline(
+                BuildHexPoints(GetCellCenter(cell), _hexSize * 0.90f),
+                new Color(0.96f, 0.86f, 0.42f, 0.70f),
+                Mathf.Max(1.0f, _hexSize * 0.06f));
+        }
+
         foreach (var reward in _rewards)
         {
             var center = GetCellCenter(reward.Key);
@@ -3646,7 +3795,7 @@ public partial class MainGameController : Node2D
             };
 
             DrawCircle(center, Mathf.Max(2.0f, _hexSize * 0.16f), new Color(glowColor.R, glowColor.G, glowColor.B, 0.36f));
-            DrawMarker(center, _hexSize * 0.58f, Colors.White, 0.0f, rewardTexture);
+            DrawMarker(center, _hexSize * 1.16f, Colors.White, 0.0f, rewardTexture);
         }
     }
 
@@ -4240,12 +4389,13 @@ public partial class MainGameController : Node2D
 
     private sealed class PlayerMovementStep
     {
-        public PlayerMovementStep(FleetState fleet, HexCoord nextHead, CollisionKind collisionKind, RewardType? pickupRewardType, AnimationEvent moveAnimation)
+        public PlayerMovementStep(FleetState fleet, HexCoord nextHead, CollisionKind collisionKind,
+            IReadOnlyList<KeyValuePair<HexCoord, RewardType>> pickupRewards, AnimationEvent moveAnimation)
         {
             Fleet = fleet;
             NextHead = nextHead;
             CollisionKind = collisionKind;
-            PickupRewardType = pickupRewardType;
+            PickupRewards = pickupRewards;
             MoveAnimation = moveAnimation;
         }
 
@@ -4255,7 +4405,7 @@ public partial class MainGameController : Node2D
 
         public CollisionKind CollisionKind { get; }
 
-        public RewardType? PickupRewardType { get; }
+        public IReadOnlyList<KeyValuePair<HexCoord, RewardType>> PickupRewards { get; }
 
         public AnimationEvent MoveAnimation { get; }
     }
