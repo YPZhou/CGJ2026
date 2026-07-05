@@ -14,16 +14,18 @@ public partial class MainGameController : Node2D
     private const int MaximumRewardsOnField = 3;
     private const int RewardSpawnMinimumBoundaryDistance = 2;
     private const int RewardAutoSpawnInterval = 6;
-    private const int FleetLengthGoal = 9;
-    private const int MaximumRange = 6;
+    private const int FleetLengthGoal = 7;
     private const int MaximumCardMoveBonus = 2;
     private const int ProjectileStepsPerPhase = 6;
     private const float PlayerMoveIntervalSeconds = 1.0f;
-    private const float PlayerBoostMoveIntervalSeconds = 0.75f;
+    private const float PlayerBoostMoveIntervalSeconds = 0.25f;
     private const float EnemyMoveIntervalSeconds = 1.5f;
     private const float PlayerProjectileIntervalSeconds = 0.2f;
+    private const float PlayerProjectileIntervalBoostSeconds = 0.02f;
+    private const float MinimumPlayerProjectileIntervalSeconds = 0.1f;
     private const float EnemyProjectileIntervalSeconds = 0.5f;
     private const float PlayerFireIntervalSeconds = 0.8f;
+    private const float PlayerFireBoostIntervalSeconds = 0.4f;
     private const float ArtilleryFireIntervalSeconds = 1.0f;
     private const float MineFireIntervalSeconds = 1.5f;
     private const float WaveTickIntervalSeconds = 5.0f;
@@ -116,13 +118,13 @@ public partial class MainGameController : Node2D
     private float _uiScale = 1.0f;
     private float _playerMoveElapsed;
     private float _enemyMoveElapsed;
-    private float _playerProjectileElapsed;
     private float _enemyProjectileElapsed;
     private float _playerFireElapsed;
     private float _artilleryFireElapsed;
     private float _mineFireElapsed;
     private float _waveTickElapsed;
     private float _playerBoostRemainingSeconds;
+    private float _playerFireBoostRemainingSeconds;
 
     private MarginContainer _hudMargin = null!;
     private VBoxContainer _hudVBox = null!;
@@ -404,7 +406,7 @@ public partial class MainGameController : Node2D
         _afterAnimationBatch = null;
         _skipRemainingTurnAnimations = false;
         _isPreviewPaused = false;
-        _isUserPaused = false;
+        SetUserPaused(false);
         _isDraggingCamera = false;
         _cameraPanOffset = Vector2.Zero;
         _cameraZoom = 1.0f;
@@ -413,13 +415,13 @@ public partial class MainGameController : Node2D
         _pendingEnemyProjectiles.Clear();
         _playerMoveElapsed = 0.0f;
         _enemyMoveElapsed = 0.0f;
-        _playerProjectileElapsed = 0.0f;
         _enemyProjectileElapsed = 0.0f;
         _playerFireElapsed = 0.0f;
         _artilleryFireElapsed = 0.0f;
         _mineFireElapsed = 0.0f;
         _waveTickElapsed = 0.0f;
         _playerBoostRemainingSeconds = 0.0f;
+        _playerFireBoostRemainingSeconds = 0.0f;
         Array.Fill(_hand, null);
         Array.Fill(_cardCooldownRemainingSeconds, 0.0f);
 
@@ -800,7 +802,7 @@ public partial class MainGameController : Node2D
         if (_selectedCardIndex == index)
         {
             ClearSelection();
-            _isUserPaused = false;
+            SetUserPaused(false);
             UpdateHudState();
             QueueRedraw();
             return;
@@ -842,11 +844,19 @@ public partial class MainGameController : Node2D
             _fleet.HeadDirection = _grid.RotateDirection(_fleet.HeadDirection, activeCard.TurnDelta);
         }
 
-        ApplyPlayerSpeedBoost();
-        _lastRewardEvent = $"已执行 {activeCard.Name}，获得 3 秒加速。";
+        if (activeCard.GrantsFireCadenceBoost)
+        {
+            ApplyPlayerFireCadenceBoost();
+            _lastRewardEvent = $"已执行 {activeCard.Name}，获得 3 秒射速提升。";
+        }
+        else
+        {
+            ApplyPlayerSpeedBoost();
+            _lastRewardEvent = $"已执行 {activeCard.Name}，获得 3 秒加速。";
+        }
 
         ClearSelection();
-        _isUserPaused = false;
+        SetUserPaused(false);
         RefreshEnemyIntents();
         UpdateHudState();
         QueueRedraw();
@@ -862,7 +872,7 @@ public partial class MainGameController : Node2D
         var clearedPreview = false;
         if (IsGamePaused)
         {
-            _isUserPaused = false;
+            SetUserPaused(false);
             if (_isPreviewPaused)
             {
                 ClearSelection();
@@ -871,7 +881,7 @@ public partial class MainGameController : Node2D
         }
         else
         {
-            _isUserPaused = true;
+            SetUserPaused(true);
         }
 
         UpdateHudState();
@@ -885,11 +895,26 @@ public partial class MainGameController : Node2D
         ? PlayerBoostMoveIntervalSeconds
         : PlayerMoveIntervalSeconds;
 
+    private float CurrentPlayerFireIntervalSeconds => _playerFireBoostRemainingSeconds > 0.0f
+        ? PlayerFireBoostIntervalSeconds
+        : PlayerFireIntervalSeconds;
+
     private bool IsGamePaused => _isPreviewPaused || _isUserPaused;
+
+    private void SetUserPaused(bool paused)
+    {
+        _isUserPaused = paused;
+        _animManager.SetPaused(paused);
+    }
 
     private void ApplyPlayerSpeedBoost()
     {
         _playerBoostRemainingSeconds = PlayerBoostDurationSeconds;
+    }
+
+    private void ApplyPlayerFireCadenceBoost()
+    {
+        _playerFireBoostRemainingSeconds = PlayerBoostDurationSeconds;
     }
 
     private void AccumulateRealtime(float deltaSeconds)
@@ -899,11 +924,23 @@ public partial class MainGameController : Node2D
             _playerBoostRemainingSeconds = Mathf.Max(0.0f, _playerBoostRemainingSeconds - deltaSeconds);
         }
 
+        if (_playerFireBoostRemainingSeconds > 0.0f)
+        {
+            _playerFireBoostRemainingSeconds = Mathf.Max(0.0f, _playerFireBoostRemainingSeconds - deltaSeconds);
+        }
+
         AdvanceCardCooldowns(deltaSeconds);
 
         _playerMoveElapsed += deltaSeconds;
         _enemyMoveElapsed += deltaSeconds;
-        _playerProjectileElapsed += deltaSeconds;
+        foreach (var projectile in _playerProjectiles)
+        {
+            if (projectile.RealtimeMoveCooldownSeconds > 0.0f)
+            {
+                projectile.RealtimeMoveCooldownSeconds = Mathf.Max(0.0f, projectile.RealtimeMoveCooldownSeconds - deltaSeconds);
+            }
+        }
+
         _enemyProjectileElapsed += deltaSeconds;
         _playerFireElapsed += deltaSeconds;
         _artilleryFireElapsed += deltaSeconds;
@@ -915,15 +952,24 @@ public partial class MainGameController : Node2D
     {
         while (!_inputLocked && !IsGamePaused && !_isGameOver)
         {
-            if (_playerProjectileElapsed >= PlayerProjectileIntervalSeconds)
+            var hasReadyPlayerProjectile = false;
+            foreach (var projectile in _playerProjectiles)
             {
-                _playerProjectileElapsed -= PlayerProjectileIntervalSeconds;
+                if (projectile.RealtimeMoveCooldownSeconds > 0.0f)
+                {
+                    continue;
+                }
+
+                hasReadyPlayerProjectile = true;
+                break;
+            }
+
+            if (hasReadyPlayerProjectile)
+            {
                 if (AdvanceRealtimeProjectileStep(ProjectileOwner.Player))
                 {
                     return;
                 }
-
-                continue;
             }
 
             if (_enemyProjectileElapsed >= EnemyProjectileIntervalSeconds)
@@ -955,9 +1001,9 @@ public partial class MainGameController : Node2D
                 continue;
             }
 
-            if (_playerFireElapsed >= PlayerFireIntervalSeconds)
+            if (_playerFireElapsed >= CurrentPlayerFireIntervalSeconds)
             {
-                _playerFireElapsed -= PlayerFireIntervalSeconds;
+                _playerFireElapsed -= CurrentPlayerFireIntervalSeconds;
                 FireRealtimePlayerVolley();
                 return;
             }
@@ -1190,7 +1236,6 @@ public partial class MainGameController : Node2D
                 WorldPosition = GetCellCenter(enemy.Coord),
                 Radius = _hexSize * 0.38f,
                 Tint = new Color(0.85f, 0.84f, 0.82f, 0.92f),
-                Direction = 0,
                 FireDirections = new List<int> { 0, 1, 2, 3, 4, 5 },
                 CannonEntityKey = enemy,
             });
@@ -1199,7 +1244,6 @@ public partial class MainGameController : Node2D
             {
                 if (TrySpawnEnemyProjectile(enemy.Coord, direction, out var hitFleet))
                 {
-                    spawnedProjectiles++;
                 }
 
                 if (!hitFleet)
@@ -1270,6 +1314,11 @@ public partial class MainGameController : Node2D
 
         foreach (var projectile in movingProjectiles)
         {
+            if (owner == ProjectileOwner.Player && projectile.RealtimeMoveCooldownSeconds > 0.0f)
+            {
+                continue;
+            }
+
             if (!TryGetProjectileAdvance(projectile, out var nextCoord))
             {
                 expiredProjectiles.Add(projectile);
@@ -1315,7 +1364,7 @@ public partial class MainGameController : Node2D
             moveAnimations.Add(new AnimationEvent
             {
                 Kind = AnimKind.ProjectileMove,
-                Duration = owner == ProjectileOwner.Player ? 0.12f : 0.18f,
+                Duration = owner == ProjectileOwner.Player ? MinimumPlayerProjectileIntervalSeconds : 0.18f,
                 EntityMoves = entityMoves,
             });
         }
@@ -1436,6 +1485,14 @@ public partial class MainGameController : Node2D
     private void CommitRealtimeProjectileStep(ProjectileStepBatch step)
     {
         CommitProjectileStepMove(step);
+
+        foreach (var move in step.Moves)
+        {
+            if (move.Projectile.Owner == ProjectileOwner.Player && move.Projectile.RealtimeMoveIntervalSeconds > 0.0f)
+            {
+                move.Projectile.RealtimeMoveCooldownSeconds = move.Projectile.RealtimeMoveIntervalSeconds;
+            }
+        }
 
         foreach (var item in step.PendingEnemyDamage)
         {
@@ -2161,23 +2218,23 @@ public partial class MainGameController : Node2D
             switch (_random.RandiRange(0, 3))
             {
                 case 0:
-                    if (segment.Range >= MaximumRange)
+                    if (GetPlayerProjectileIntervalSeconds(segment) <= MinimumPlayerProjectileIntervalSeconds + 0.0001f)
                     {
                         continue;
                     }
 
-                    segment.Range++;
-                    return $"火力强化：{DescribeSegment(segmentIndex)}射程提升至 {segment.Range}。";
+                    segment.ProjectileIntervalBoostLevel++;
+                    return $"火力强化：{DescribeSegment(segmentIndex)}炮弹推进间隔缩短至 {GetPlayerProjectileIntervalSeconds(segment):0.00} 秒。";
                 case 1:
                     segment.Damage++;
                     return $"火力强化：{DescribeSegment(segmentIndex)}伤害提升至 {segment.Damage}。";
                 case 2:
-                    if (segment.ScatterLevel >= 2)
+                    if (segment.ScatterLevel >= 1)
                     {
                         continue;
                     }
 
-                    segment.ScatterLevel++;
+                    segment.ScatterLevel = 1;
                     return $"火力强化：{DescribeSegment(segmentIndex)}获得{DescribeScatter(segment.ScatterLevel)}。";
                 case 3:
                     if (segment.HasExplosive)
@@ -2197,6 +2254,13 @@ public partial class MainGameController : Node2D
         return "拾取指令校准，获得 3 秒加速。";
     }
 
+    private float GetPlayerProjectileIntervalSeconds(FleetSegmentState segment)
+    {
+        return Mathf.Max(
+            MinimumPlayerProjectileIntervalSeconds,
+            PlayerProjectileIntervalSeconds - segment.ProjectileIntervalBoostLevel * PlayerProjectileIntervalBoostSeconds);
+    }
+
     private static string DescribeSegment(int segmentIndex)
     {
         return segmentIndex == 0 ? "蛇头" : $"第 {segmentIndex + 1} 节舰船";
@@ -2204,12 +2268,7 @@ public partial class MainGameController : Node2D
 
     private static string DescribeScatter(int scatterLevel)
     {
-        return scatterLevel switch
-        {
-            1 => "散射 I",
-            2 => "散射 II",
-            _ => "散射",
-        };
+        return "散射";
     }
 
     private CollisionKind CheckHeadEntry(HexCoord target, FleetState fleet)
@@ -2268,7 +2327,7 @@ public partial class MainGameController : Node2D
             var segment = _fleet.Segments[index];
             var isHead = index == 0;
             var baseDirection = isHead ? _fleet.HeadDirection : segment.EntryDirection;
-            var fireDirections = BuildFireDirections(baseDirection, isHead);
+            var fireDirections = BuildFireDirections(baseDirection, isHead, segment.ScatterLevel);
 
             if (animEvents != null && fireDirections.Count > 0)
             {
@@ -2355,7 +2414,13 @@ public partial class MainGameController : Node2D
 
             if (step == segment.Range)
             {
-                var projectile = new ProjectileState(firstCell, fireDirection, segment.Damage, ProjectileOwner.Player, segment.HasExplosive);
+                var projectile = new ProjectileState(
+                    firstCell,
+                    fireDirection,
+                    segment.Damage,
+                    ProjectileOwner.Player,
+                    segment.HasExplosive,
+                    GetPlayerProjectileIntervalSeconds(segment));
                 _pendingPlayerProjectiles.Add(projectile);
                 return ShotResolution.SpawnedProjectile;
             }
@@ -2366,17 +2431,23 @@ public partial class MainGameController : Node2D
         return ShotResolution.None;
     }
 
-    private List<int> BuildFireDirections(int baseDirection, bool includeForward)
+    private List<int> BuildFireDirections(int baseDirection, bool isHead, int scatterLevel)
     {
         var directions = new List<int>();
 
-        if (includeForward)
+        if (isHead)
         {
             directions.Add(HexCoord.WrapDirection(baseDirection));
         }
 
         directions.Add(HexCoord.WrapDirection(baseDirection - 1));
         directions.Add(HexCoord.WrapDirection(baseDirection + 1));
+
+        if (scatterLevel >= 1)
+        {
+            directions.Add(HexCoord.WrapDirection(baseDirection - 2));
+            directions.Add(HexCoord.WrapDirection(baseDirection + 2));
+        }
 
         return directions;
     }
@@ -3486,9 +3557,23 @@ public partial class MainGameController : Node2D
                 ? $"预览危险: {DescribeCollision(_preview.CollisionKind)}"
                 : $"已选择 {_selectedCard.Name}: {_selectedCard.Summary}";
         }
-        else if (_playerBoostRemainingSeconds > 0.0f)
+        else if (_playerBoostRemainingSeconds > 0.0f || _playerFireBoostRemainingSeconds > 0.0f)
         {
-            detail = $"舰队处于加速状态，剩余 {Mathf.CeilToInt(_playerBoostRemainingSeconds)} 秒。";
+            var moveBoostText = _playerBoostRemainingSeconds > 0.0f
+                ? $"加速 {Mathf.CeilToInt(_playerBoostRemainingSeconds)} 秒"
+                : string.Empty;
+            var fireBoostText = _playerFireBoostRemainingSeconds > 0.0f
+                ? $"射速提升 {Mathf.CeilToInt(_playerFireBoostRemainingSeconds)} 秒"
+                : string.Empty;
+
+            if (!string.IsNullOrEmpty(moveBoostText) && !string.IsNullOrEmpty(fireBoostText))
+            {
+                detail = $"舰队增益: {moveBoostText}，{fireBoostText}。";
+            }
+            else
+            {
+                detail = $"舰队增益: {moveBoostText}{fireBoostText}。";
+            }
         }
 
         _statusLabel.Text = $"波次 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{detail}";
@@ -3560,7 +3645,7 @@ public partial class MainGameController : Node2D
 
         if (_fleet.Occupies(coord))
         {
-            lines.Add($"我方舰队：指令卡决定航向，确认后会获得 3 秒加速，当前长度 {_fleet.Segments.Count}。" );
+            lines.Add($"我方舰队：指令卡决定航向；紧急加速、左漂移、右漂移确认后可获得 3 秒射速提升，其余指令确认后可获得 3 秒加速；指令校准可获得 3 秒加速，当前长度 {_fleet.Segments.Count}。" );
         }
 
         var enemy = FindEnemyAt(coord);
@@ -3611,8 +3696,8 @@ public partial class MainGameController : Node2D
         if (playerProjectileCount > 0)
         {
             lines.Add(playerProjectileCount == 1
-                ? "己方炮弹：每 0.2 秒前进 1 格，可拦截敌方炮弹。"
-                : $"己方炮弹 x{playerProjectileCount}：每 0.2 秒前进 1 格，可拦截敌方炮弹。");
+                ? "己方炮弹：按发射舰段的推进间隔前进，可拦截敌方炮弹。"
+                : $"己方炮弹 x{playerProjectileCount}：按发射舰段的推进间隔前进，可拦截敌方炮弹。");
         }
 
         var enemyProjectileCount = CountProjectilesAt(_enemyProjectiles, coord);
@@ -3682,9 +3767,19 @@ public partial class MainGameController : Node2D
 
     private void UpdateRewardLabel()
     {
-        var boostText = _playerBoostRemainingSeconds > 0.0f
+        var moveBoostText = _playerBoostRemainingSeconds > 0.0f
             ? $"加速 {Mathf.CeilToInt(_playerBoostRemainingSeconds)} 秒"
-            : "加速 0 秒";
+            : string.Empty;
+        var fireBoostText = _playerFireBoostRemainingSeconds > 0.0f
+            ? $"射速提升 {Mathf.CeilToInt(_playerFireBoostRemainingSeconds)} 秒"
+            : string.Empty;
+        var boostText = string.IsNullOrEmpty(moveBoostText) && string.IsNullOrEmpty(fireBoostText)
+            ? "增益 无"
+            : string.IsNullOrEmpty(moveBoostText)
+                ? fireBoostText
+                : string.IsNullOrEmpty(fireBoostText)
+                    ? moveBoostText
+                    : $"{moveBoostText} / {fireBoostText}";
         _rewardLabel.Text = $"奖励 {_rewards.Count}/{MaximumRewardsOnField}  {boostText}\n{_lastRewardEvent}";
     }
 

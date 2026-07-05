@@ -56,17 +56,22 @@ public sealed class MoveCard
 
     public int TotalMove => BaseMove + MoveBonus;
 
+    public bool GrantsFireCadenceBoost => Name is "紧急加速" or "左漂移" or "右漂移";
+
     public string Summary
     {
         get
         {
-            if (TurnDelta == 0)
-            {
-                return "获得 3 秒加速";
-            }
+            var turnText = TurnDelta > 0
+                ? "右转"
+                : TurnDelta < 0
+                    ? "左转"
+                    : string.Empty;
+            var boostText = GrantsFireCadenceBoost ? "射速提升" : "加速";
 
-            var turnText = TurnDelta > 0 ? "右转" : "左转";
-            return $"{turnText}并获得 3 秒加速";
+            return string.IsNullOrEmpty(turnText)
+                ? $"获得 3 秒{boostText}"
+                : $"{turnText}并获得 3 秒{boostText}";
         }
     }
 
