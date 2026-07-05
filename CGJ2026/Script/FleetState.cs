@@ -130,6 +130,8 @@ public sealed class FleetSegmentState
 
     public int ScatterLevel { get; set; }
 
+    public int ProjectileIntervalBoostLevel { get; set; }
+
     public bool HasExplosive { get; set; }
 
     public FleetSegmentState Clone()
@@ -140,6 +142,7 @@ public sealed class FleetSegmentState
             Range = Range,
             Damage = Damage,
             ScatterLevel = ScatterLevel,
+            ProjectileIntervalBoostLevel = ProjectileIntervalBoostLevel,
             HasExplosive = HasExplosive,
         };
     }

@@ -12,16 +12,30 @@ public partial class MainGameController : Node2D
     private const int MaximumReefSize = 3;
     private const int ReefSafeDistance = 3;
     private const int MaximumRewardsOnField = 3;
+    private const int RewardSpawnMinimumBoundaryDistance = 2;
     private const int RewardAutoSpawnInterval = 6;
-    private const int FleetLengthGoal = 9;
-    private const int MaximumRange = 6;
+    private const int FleetLengthGoal = 7;
     private const int MaximumCardMoveBonus = 2;
     private const int ProjectileStepsPerPhase = 6;
+    private const float PlayerMoveIntervalSeconds = 1.0f;
+    private const float PlayerBoostMoveIntervalSeconds = 0.25f;
+    private const float EnemyMoveIntervalSeconds = 1.5f;
+    private const float PlayerProjectileIntervalSeconds = 0.2f;
+    private const float PlayerProjectileIntervalBoostSeconds = 0.02f;
+    private const float MinimumPlayerProjectileIntervalSeconds = 0.1f;
+    private const float EnemyProjectileIntervalSeconds = 0.5f;
+    private const float PlayerFireIntervalSeconds = 0.8f;
+    private const float PlayerFireBoostIntervalSeconds = 0.4f;
+    private const float ArtilleryFireIntervalSeconds = 1.0f;
+    private const float MineFireIntervalSeconds = 1.5f;
+    private const float WaveTickIntervalSeconds = 5.0f;
+    private const float PlayerBoostDurationSeconds = 3.0f;
     private const float BaseViewportWidth = 1280.0f;
     private const float BaseViewportHeight = 720.0f;
     private const float BoardMargin = 36.0f;
     private const float BoardTopInset = 96.0f;
     private const float BoardBottomInset = 220.0f;
+    private const float BoardScaleMultiplier = 2.0f;
     private const float MinimumUiScale = 0.35f;
     private const float MaximumUiScale = 1.5f;
     private const float MinimumHexSize = 4.0f;
@@ -29,6 +43,7 @@ public partial class MainGameController : Node2D
     private const float HoverTooltipOffsetX = 18.0f;
     private const float HoverTooltipOffsetY = 14.0f;
     private const float HoverTooltipViewportMargin = 8.0f;
+    private const float CardCooldownSeconds = 1.5f;
     private const int PlayerFireBatchGroup = 1;
     private const int EnemyFireBatchGroup = 2;
 
@@ -47,18 +62,27 @@ public partial class MainGameController : Node2D
 
     private readonly RandomNumberGenerator _random = new();
     private readonly List<Button> _cardButtons = new();
+    private readonly List<ProgressBar> _cardCooldownBars = new();
     private readonly List<HexCoord> _drawOrderedCells = new();
-    private readonly List<MoveCard> _hand = new();
+    private readonly MoveCard?[] _hand = new MoveCard?[InitialHandSize];
+    private readonly float[] _cardCooldownRemainingSeconds = new float[InitialHandSize];
     private readonly List<EnemyState> _enemies = new();
     private readonly List<ProjectileState> _playerProjectiles = new();
     private readonly List<ProjectileState> _enemyProjectiles = new();
     private readonly List<ProjectileState> _pendingPlayerProjectiles = new();
     private readonly List<ProjectileState> _pendingEnemyProjectiles = new();
     private readonly Dictionary<HexCoord, RewardType> _rewards = new();
+    private readonly Dictionary<HexCoord, Texture2D> _reefTexturesByCell = new();
 
     private Texture2D _placeholder = null!;
     private Texture2D _seaGridTexture = null!;
     private Texture2D _reefTexture = null!;
+    private Texture2D _reefTextureAlt = null!;
+    private Texture2D _forwardInstructionTexture = null!;
+    private Texture2D _leftTurnInstructionTexture = null!;
+    private Texture2D _rightTurnInstructionTexture = null!;
+    private Texture2D _playerBoatTexture = null!;
+    private Texture2D _playerHeadBoatTexture = null!;
     private Texture2D _growthModuleTexture = null!;
     private Texture2D _commandReloadTexture = null!;
     private Texture2D _firepowerUpgradeTexture = null!;
@@ -69,20 +93,38 @@ public partial class MainGameController : Node2D
     private SimulationResult? _preview;
     private MoveCard? _selectedCard;
     private int _selectedCardIndex = -1;
+    private int _pendingCardSelectionIndex = -1;
     private bool _isGameOver;
     private bool _isVictory;
+    private bool _isPreviewPaused;
+    private bool _isUserPaused;
     private string _gameOverReason = string.Empty;
     private string _lastCombatEvent = string.Empty;
     private string _lastRewardEvent = string.Empty;
     private int _turnCounter = 1;
+    private int? _pendingGrowthModuleRespawnTurn;
     private int _straightPoolUpgrades;
     private int _leftPoolUpgrades;
     private int _rightPoolUpgrades;
     private float _hexSize = 16.0f;
+    private Vector2 _cameraPanOffset;
+    private float _cameraZoom = 1.0f;
+    private const float ZoomMin = 0.4f;
+    private const float ZoomMax = 3.0f;
+    private const float ZoomStep = 0.1f;
     private Vector2 _boardOrigin;
     private Vector2 _baseBoundsMin;
     private Vector2 _baseBoundsMax;
     private float _uiScale = 1.0f;
+    private float _playerMoveElapsed;
+    private float _enemyMoveElapsed;
+    private float _enemyProjectileElapsed;
+    private float _playerFireElapsed;
+    private float _artilleryFireElapsed;
+    private float _mineFireElapsed;
+    private float _waveTickElapsed;
+    private float _playerBoostRemainingSeconds;
+    private float _playerFireBoostRemainingSeconds;
 
     private MarginContainer _hudMargin = null!;
     private VBoxContainer _hudVBox = null!;
@@ -94,11 +136,13 @@ public partial class MainGameController : Node2D
     private PanelContainer _hoverTooltip = null!;
     private Label _hoverTooltipLabel = null!;
     private Button _confirmButton = null!;
+    private Button _pauseButton = null!;
     private float _baseHudMargin;
     private int _baseHudSeparation;
     private int _baseCardsRowSeparation;
     private Vector2 _baseCardButtonSize;
     private Vector2 _baseConfirmButtonSize;
+    private Vector2 _basePauseButtonSize;
     private int _baseStatusFontSize;
     private int _baseHintFontSize;
     private int _baseCombatFontSize;
@@ -114,11 +158,15 @@ public partial class MainGameController : Node2D
     private int _baseGameOverStatsFontSize;
     private int _baseCardFontSize;
     private int _baseConfirmFontSize;
+    private int _basePauseFontSize;
     private AnimationManager _animManager = null!;
     private EntityDisplayCoordinator _coordinator = null!;
+    private Camera2D _boardCamera = null!;
     private bool _inputLocked;
+    private bool _isDraggingCamera;
     private PendingTurnState? _activeTurn;
     private Action? _afterAnimationBatch;
+    private int _animationBatchSequence;
     private bool _skipRemainingTurnAnimations;
 
     public override void _Ready()
@@ -126,10 +174,17 @@ public partial class MainGameController : Node2D
         _placeholder = GD.Load<Texture2D>("res://icon.svg");
         _seaGridTexture = GD.Load<Texture2D>("res://Art/SeaGrid.png");
         _reefTexture = GD.Load<Texture2D>("res://Art/Rock.png");
+        _reefTextureAlt = GD.Load<Texture2D>("res://Art/Rock2.png");
+        _forwardInstructionTexture = GD.Load<Texture2D>("res://Art/Forward.png");
+        _leftTurnInstructionTexture = GD.Load<Texture2D>("res://Art/LeftTurn.png");
+        _rightTurnInstructionTexture = GD.Load<Texture2D>("res://Art/RightTurn.png");
+        _playerBoatTexture = GD.Load<Texture2D>("res://Art/Boat.png");
+        _playerHeadBoatTexture = GD.Load<Texture2D>("res://Art/HeadBoat.png");
         _growthModuleTexture = GD.Load<Texture2D>("res://Art/BonusIncreaseBoat.png");
         _commandReloadTexture = GD.Load<Texture2D>("res://Art/BonusRefreshInstruction.png");
         _firepowerUpgradeTexture = GD.Load<Texture2D>("res://Art/BonusPowerUp.png");
         _cardCalibrationTexture = GD.Load<Texture2D>("res://Art/BonusBoostInstruction.png");
+        _boardCamera = GetNode<Camera2D>("BoardCamera");
         ResolveHudNodes();
         HookHudEvents();
 
@@ -154,10 +209,54 @@ public partial class MainGameController : Node2D
 
     public override void _Input(InputEvent @event)
     {
+        if (_isDraggingCamera)
+        {
+            if (@event is InputEventMouseMotion mouseMotion)
+            {
+                _cameraPanOffset -= mouseMotion.Relative;
+                RefreshCameraPosition();
+                return;
+            }
+
+            if (@event is InputEventMouseButton mouseButton && mouseButton.ButtonIndex == MouseButton.Left && !mouseButton.Pressed)
+            {
+                _isDraggingCamera = false;
+                return;
+            }
+        }
+
         if (_inputLocked && @event is InputEventKey keyEvent && keyEvent.Pressed && keyEvent.Keycode is Key.Space or Key.Enter)
         {
             _skipRemainingTurnAnimations = true;
             _animManager.SkipAll();
+        }
+    }
+
+    public override void _UnhandledInput(InputEvent @event)
+    {
+        if (_isGameOver)
+        {
+            return;
+        }
+
+        if (@event is InputEventMouseButton mouseButton && mouseButton.ButtonIndex == MouseButton.Left && mouseButton.Pressed)
+        {
+            _isDraggingCamera = true;
+        }
+
+        if (@event is InputEventMouseButton scroll && (scroll.ButtonIndex == MouseButton.WheelDown || scroll.ButtonIndex == MouseButton.WheelUp))
+        {
+            float oldZoom = _cameraZoom;
+            float direction = scroll.ButtonIndex == MouseButton.WheelUp ? 1.0f : -1.0f;
+            _cameraZoom = Mathf.Clamp(_cameraZoom + direction * ZoomStep, ZoomMin, ZoomMax);
+
+            if (Mathf.Abs(_cameraZoom - oldZoom) > 0.0001f)
+            {
+                Vector2 viewportCenter = GetViewportRect().Size * 0.5f;
+                Vector2 mousePos = scroll.GlobalPosition;
+                _cameraPanOffset += (mousePos - viewportCenter) * (1.0f / oldZoom - 1.0f / _cameraZoom);
+                RefreshCameraPosition();
+            }
         }
     }
 
@@ -170,13 +269,24 @@ public partial class MainGameController : Node2D
 
         if (_inputLocked)
         {
-            _animManager.Update((float)delta);
+            if (!_isUserPaused)
+            {
+                _animManager.Update((float)delta);
+            }
+
+            UpdateHoverTooltip(GetLocalMousePosition(), GetViewport().GetMousePosition());
             return;
         }
 
         if (_isGameOver)
         {
             return;
+        }
+
+        if (!IsGamePaused)
+        {
+            AccumulateRealtime((float)delta);
+            TryRunNextRealtimeAction();
         }
 
         UpdateHoverTooltip(GetLocalMousePosition(), GetViewport().GetMousePosition());
@@ -226,17 +336,35 @@ public partial class MainGameController : Node2D
         _hoverTooltip = GetNode<PanelContainer>("HudLayer/HoverTooltip");
         _hoverTooltipLabel = GetNode<Label>("HudLayer/HoverTooltip/HoverTooltipLabel");
         _confirmButton = GetNode<Button>("HudLayer/HudMargin/HudVBox/ConfirmButton");
+        _pauseButton = GetNode<Button>("HudLayer/PauseButton");
 
         _cardButtons.Clear();
         _cardButtons.Add(GetNode<Button>("HudLayer/HudMargin/HudVBox/CardsRow/CardButton0"));
         _cardButtons.Add(GetNode<Button>("HudLayer/HudMargin/HudVBox/CardsRow/CardButton1"));
         _cardButtons.Add(GetNode<Button>("HudLayer/HudMargin/HudVBox/CardsRow/CardButton2"));
+        _cardCooldownBars.Clear();
+        foreach (var button in _cardButtons)
+        {
+            var cooldownBar = new ProgressBar
+            {
+                ShowPercentage = false,
+                MinValue = 0.0,
+                MaxValue = CardCooldownSeconds,
+                Value = 0.0,
+                Visible = false,
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+            };
+            cooldownBar.SetAnchorsPreset(Control.LayoutPreset.BottomWide);
+            button.AddChild(cooldownBar);
+            _cardCooldownBars.Add(cooldownBar);
+        }
 
         _baseHudMargin = Mathf.Abs(_hudMargin.OffsetLeft);
         _baseHudSeparation = _hudVBox.GetThemeConstant("separation");
         _baseCardsRowSeparation = _cardsRow.GetThemeConstant("separation");
         _baseCardButtonSize = _cardButtons[0].CustomMinimumSize;
         _baseConfirmButtonSize = _confirmButton.CustomMinimumSize;
+        _basePauseButtonSize = _pauseButton.CustomMinimumSize;
         _baseStatusFontSize = _statusLabel.GetThemeFontSize("font_size");
         _baseHintFontSize = _hintLabel.GetThemeFontSize("font_size");
         _baseCombatFontSize = _combatLabel.GetThemeFontSize("font_size");
@@ -244,6 +372,7 @@ public partial class MainGameController : Node2D
         _baseHoverTooltipFontSize = _hoverTooltipLabel.GetThemeFontSize("font_size");
         _baseCardFontSize = _cardButtons[0].GetThemeFontSize("font_size");
         _baseConfirmFontSize = _confirmButton.GetThemeFontSize("font_size");
+        _basePauseFontSize = _pauseButton.GetThemeFontSize("font_size");
 
         _gameOverOverlay = GetNode<ColorRect>("HudLayer/GameOverOverlay");
         _gameOverTitleLabel = GetNode<Label>("HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox/GameOverTitleLabel");
@@ -265,6 +394,7 @@ public partial class MainGameController : Node2D
         }
 
         _confirmButton.Pressed += OnConfirmPressed;
+        _pauseButton.Pressed += OnPauseButtonPressed;
         _gameOverRestartButton.Pressed += StartNewDemo;
     }
 
@@ -275,8 +405,25 @@ public partial class MainGameController : Node2D
         _activeTurn = null;
         _afterAnimationBatch = null;
         _skipRemainingTurnAnimations = false;
+        _isPreviewPaused = false;
+        SetUserPaused(false);
+        _isDraggingCamera = false;
+        _cameraPanOffset = Vector2.Zero;
+        _cameraZoom = 1.0f;
+        _pendingCardSelectionIndex = -1;
         _pendingPlayerProjectiles.Clear();
         _pendingEnemyProjectiles.Clear();
+        _playerMoveElapsed = 0.0f;
+        _enemyMoveElapsed = 0.0f;
+        _enemyProjectileElapsed = 0.0f;
+        _playerFireElapsed = 0.0f;
+        _artilleryFireElapsed = 0.0f;
+        _mineFireElapsed = 0.0f;
+        _waveTickElapsed = 0.0f;
+        _playerBoostRemainingSeconds = 0.0f;
+        _playerFireBoostRemainingSeconds = 0.0f;
+        Array.Fill(_hand, null);
+        Array.Fill(_cardCooldownRemainingSeconds, 0.0f);
 
         _gameOverOverlay.Visible = false;
 
@@ -316,15 +463,22 @@ public partial class MainGameController : Node2D
 
         _fleet = fleet;
         _reefCells = reefs;
+        _reefTexturesByCell.Clear();
+        foreach (var reef in _reefCells)
+        {
+            _reefTexturesByCell[reef] = _random.Randf() < 0.5f
+                ? _reefTexture
+                : _reefTextureAlt;
+        }
         _enemies.Clear();
         _playerProjectiles.Clear();
         _enemyProjectiles.Clear();
         _rewards.Clear();
-        _hand.Clear();
         _straightPoolUpgrades = 0;
         _leftPoolUpgrades = 0;
         _rightPoolUpgrades = 0;
         _turnCounter = 1;
+        _pendingGrowthModuleRespawnTurn = null;
         _isGameOver = false;
         _isVictory = false;
         _gameOverReason = string.Empty;
@@ -437,7 +591,7 @@ public partial class MainGameController : Node2D
 
     private void SpawnInitialRewards()
     {
-        TrySpawnRandomReward(minimumDistanceFromExistingRewards: 0);
+        TrySpawnRandomReward(minimumDistanceFromExistingRewards: 0, forcedRewardType: RewardType.GrowthModule);
         TrySpawnRandomReward(minimumDistanceFromExistingRewards: 4);
     }
 
@@ -557,30 +711,113 @@ public partial class MainGameController : Node2D
         return _grid.Radius - edgeDistance;
     }
 
+    private bool HasGrowthModuleOnField()
+    {
+        foreach (var rewardType in _rewards.Values)
+        {
+            if (rewardType == RewardType.GrowthModule)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool CanAddReward(RewardType rewardType)
+    {
+        if (rewardType == RewardType.GrowthModule && HasGrowthModuleOnField())
+        {
+            return false;
+        }
+
+        var rewardLimit = MaximumRewardsOnField;
+        if (rewardType != RewardType.GrowthModule && _pendingGrowthModuleRespawnTurn.HasValue)
+        {
+            rewardLimit--;
+        }
+
+        return _rewards.Count < rewardLimit;
+    }
+
     private void FillHand()
     {
-        _hand.Clear();
-
-        var cards = new List<MoveCard>
+        for (var index = 0; index < InitialHandSize; index++)
         {
-            MoveCard.DrawFromPool(MoveCard.LeftPool, _leftPoolUpgrades, _random),
-            MoveCard.DrawFromPool(MoveCard.StraightPool, _straightPoolUpgrades, _random),
-            MoveCard.DrawFromPool(MoveCard.RightPool, _rightPoolUpgrades, _random),
-        };
+            _cardCooldownRemainingSeconds[index] = 0.0f;
+            DrawCardForSlot(index);
+        }
+    }
 
-        _hand.AddRange(cards);
+    private void FillHand(bool randomizeDirections)
+    {
+        for (var index = 0; index < InitialHandSize; index++)
+        {
+            _cardCooldownRemainingSeconds[index] = 0.0f;
+            _hand[index] = randomizeDirections
+                ? DrawCardForDirectionIndex(_random.RandiRange(0, 2))
+                : DrawCardForDirectionIndex(index);
+        }
+    }
+
+    private void DrawCardForSlot(int slotIndex)
+    {
+        _hand[slotIndex] = DrawCardForDirectionIndex(slotIndex);
+    }
+
+    private MoveCard DrawCardForDirectionIndex(int directionIndex)
+    {
+        return directionIndex switch
+        {
+            0 => MoveCard.DrawFromPool(MoveCard.LeftPool, _leftPoolUpgrades, _random),
+            1 => MoveCard.DrawFromPool(MoveCard.StraightPool, _straightPoolUpgrades, _random),
+            2 => MoveCard.DrawFromPool(MoveCard.RightPool, _rightPoolUpgrades, _random),
+            _ => throw new ArgumentOutOfRangeException(nameof(directionIndex)),
+        };
     }
 
     private void SelectCard(int index)
     {
-        if (_isGameOver || _inputLocked || index < 0 || index >= _hand.Count)
+        if (_isGameOver || index < 0 || index >= _hand.Length || _hand[index] == null)
+        {
+            return;
+        }
+
+        if (_inputLocked)
+        {
+            _pendingCardSelectionIndex = index;
+            return;
+        }
+
+        ApplyCardSelection(index);
+    }
+
+    private void ApplyCardSelection(int index)
+    {
+        if (_isGameOver || index < 0 || index >= _hand.Length || _hand[index] == null)
+        {
+            return;
+        }
+
+        if (_selectedCardIndex == index)
+        {
+            ClearSelection();
+            SetUserPaused(false);
+            UpdateHudState();
+            QueueRedraw();
+            return;
+        }
+
+        var card = _hand[index];
+        if (card == null)
         {
             return;
         }
 
         _selectedCardIndex = index;
-        _selectedCard = _hand[index];
-        _preview = ResolveCardMovement(_fleet, _selectedCard, previewOnly: true);
+        _selectedCard = card;
+        _preview = ResolveCardMovement(_fleet, card, previewOnly: true);
+        _isPreviewPaused = true;
 
         UpdateHudState();
         QueueRedraw();
@@ -588,24 +825,220 @@ public partial class MainGameController : Node2D
 
     private void OnConfirmPressed()
     {
-        if (_isGameOver || _inputLocked || _selectedCard == null || _selectedCardIndex < 0 || _selectedCardIndex >= _hand.Count)
+        if (_isGameOver || _inputLocked || _selectedCard == null || _selectedCardIndex < 0 || _selectedCardIndex >= _hand.Length)
         {
             return;
         }
 
         var activeCard = _hand[_selectedCardIndex];
-        _hand.RemoveAt(_selectedCardIndex);
-        ClearSelection();
-
-        _activeTurn = new PendingTurnState
+        if (activeCard == null)
         {
-            Card = activeCard,
-            RemainingPlayerSteps = activeCard.TotalMove,
-        };
-        _skipRemainingTurnAnimations = false;
-        _afterAnimationBatch = null;
+            return;
+        }
 
-        BeginProjectilePhase();
+        _hand[_selectedCardIndex] = null;
+        _cardCooldownRemainingSeconds[_selectedCardIndex] = CardCooldownSeconds;
+
+        if (activeCard.TurnDelta != 0)
+        {
+            _fleet.HeadDirection = _grid.RotateDirection(_fleet.HeadDirection, activeCard.TurnDelta);
+        }
+
+        if (activeCard.GrantsFireCadenceBoost)
+        {
+            ApplyPlayerFireCadenceBoost();
+            _lastRewardEvent = $"已执行 {activeCard.Name}，获得 3 秒射速提升。";
+        }
+        else
+        {
+            ApplyPlayerSpeedBoost();
+            _lastRewardEvent = $"已执行 {activeCard.Name}，获得 3 秒加速。";
+        }
+
+        ClearSelection();
+        SetUserPaused(false);
+        RefreshEnemyIntents();
+        UpdateHudState();
+        QueueRedraw();
+    }
+
+    private void OnPauseButtonPressed()
+    {
+        if (_isGameOver)
+        {
+            return;
+        }
+
+        var clearedPreview = false;
+        if (IsGamePaused)
+        {
+            SetUserPaused(false);
+            if (_isPreviewPaused)
+            {
+                ClearSelection();
+                clearedPreview = true;
+            }
+        }
+        else
+        {
+            SetUserPaused(true);
+        }
+
+        UpdateHudState();
+        if (clearedPreview)
+        {
+            QueueRedraw();
+        }
+    }
+
+    private float CurrentPlayerMoveIntervalSeconds => _playerBoostRemainingSeconds > 0.0f
+        ? PlayerBoostMoveIntervalSeconds
+        : PlayerMoveIntervalSeconds;
+
+    private float CurrentPlayerFireIntervalSeconds => _playerFireBoostRemainingSeconds > 0.0f
+        ? PlayerFireBoostIntervalSeconds
+        : PlayerFireIntervalSeconds;
+
+    private bool IsGamePaused => _isPreviewPaused || _isUserPaused;
+
+    private void SetUserPaused(bool paused)
+    {
+        _isUserPaused = paused;
+        _animManager.SetPaused(paused);
+    }
+
+    private void ApplyPlayerSpeedBoost()
+    {
+        _playerBoostRemainingSeconds = PlayerBoostDurationSeconds;
+    }
+
+    private void ApplyPlayerFireCadenceBoost()
+    {
+        _playerFireBoostRemainingSeconds = PlayerBoostDurationSeconds;
+    }
+
+    private void AccumulateRealtime(float deltaSeconds)
+    {
+        if (_playerBoostRemainingSeconds > 0.0f)
+        {
+            _playerBoostRemainingSeconds = Mathf.Max(0.0f, _playerBoostRemainingSeconds - deltaSeconds);
+        }
+
+        if (_playerFireBoostRemainingSeconds > 0.0f)
+        {
+            _playerFireBoostRemainingSeconds = Mathf.Max(0.0f, _playerFireBoostRemainingSeconds - deltaSeconds);
+        }
+
+        AdvanceCardCooldowns(deltaSeconds);
+
+        _playerMoveElapsed += deltaSeconds;
+        _enemyMoveElapsed += deltaSeconds;
+        foreach (var projectile in _playerProjectiles)
+        {
+            if (projectile.RealtimeMoveCooldownSeconds > 0.0f)
+            {
+                projectile.RealtimeMoveCooldownSeconds = Mathf.Max(0.0f, projectile.RealtimeMoveCooldownSeconds - deltaSeconds);
+            }
+        }
+
+        _enemyProjectileElapsed += deltaSeconds;
+        _playerFireElapsed += deltaSeconds;
+        _artilleryFireElapsed += deltaSeconds;
+        _mineFireElapsed += deltaSeconds;
+        _waveTickElapsed += deltaSeconds;
+    }
+
+    private void TryRunNextRealtimeAction()
+    {
+        while (!_inputLocked && !IsGamePaused && !_isGameOver)
+        {
+            var hasReadyPlayerProjectile = false;
+            foreach (var projectile in _playerProjectiles)
+            {
+                if (projectile.RealtimeMoveCooldownSeconds > 0.0f)
+                {
+                    continue;
+                }
+
+                hasReadyPlayerProjectile = true;
+                break;
+            }
+
+            if (hasReadyPlayerProjectile)
+            {
+                if (AdvanceRealtimeProjectileStep(ProjectileOwner.Player))
+                {
+                    return;
+                }
+            }
+
+            if (_enemyProjectileElapsed >= EnemyProjectileIntervalSeconds)
+            {
+                _enemyProjectileElapsed -= EnemyProjectileIntervalSeconds;
+                if (AdvanceRealtimeProjectileStep(ProjectileOwner.Enemy))
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_playerMoveElapsed >= CurrentPlayerMoveIntervalSeconds)
+            {
+                _playerMoveElapsed -= CurrentPlayerMoveIntervalSeconds;
+                AdvanceRealtimePlayerMovement();
+                return;
+            }
+
+            if (_enemyMoveElapsed >= EnemyMoveIntervalSeconds)
+            {
+                _enemyMoveElapsed -= EnemyMoveIntervalSeconds;
+                if (AdvanceRealtimeEnemyMovement())
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_playerFireElapsed >= CurrentPlayerFireIntervalSeconds)
+            {
+                _playerFireElapsed -= CurrentPlayerFireIntervalSeconds;
+                FireRealtimePlayerVolley();
+                return;
+            }
+
+            if (_artilleryFireElapsed >= ArtilleryFireIntervalSeconds)
+            {
+                _artilleryFireElapsed -= ArtilleryFireIntervalSeconds;
+                if (FireRealtimeArtilleryVolley())
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_mineFireElapsed >= MineFireIntervalSeconds)
+            {
+                _mineFireElapsed -= MineFireIntervalSeconds;
+                if (FireRealtimeMineVolley())
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (_waveTickElapsed >= WaveTickIntervalSeconds)
+            {
+                _waveTickElapsed -= WaveTickIntervalSeconds;
+                AdvanceRealtimeWaveTick();
+                continue;
+            }
+
+            return;
+        }
     }
 
     private void BeginProjectilePhase()
@@ -616,6 +1049,497 @@ public partial class MainGameController : Node2D
         }
 
         ContinueProjectilePhase();
+    }
+
+    private void AdvanceRealtimePlayerMovement()
+    {
+        var step = BuildRealtimePlayerMovementStep();
+        PlayAnimationBatch(new List<AnimationEvent> { step.MoveAnimation }, () => CommitRealtimePlayerMovementStep(step));
+    }
+
+    private PlayerMovementStep BuildRealtimePlayerMovementStep()
+    {
+        var stagedFleet = _fleet.Clone();
+        var advance = ResolvePlayerAdvance(stagedFleet);
+        stagedFleet.HeadDirection = advance.Direction;
+        var collision = CheckHeadEntry(advance.Coord, _fleet);
+        var moveAnimation = BuildFleetStepAnimation(stagedFleet, advance.Coord);
+
+        stagedFleet.MoveOneStep(advance.Coord, _grid);
+        if (collision == CollisionKind.None && stagedFleet.HasDuplicateCoords())
+        {
+            collision = CollisionKind.Self;
+        }
+
+        IReadOnlyList<KeyValuePair<HexCoord, RewardType>> pickupRewards = Array.Empty<KeyValuePair<HexCoord, RewardType>>();
+        if (collision == CollisionKind.None)
+        {
+            pickupRewards = GetRewardPickups(stagedFleet.Head, _rewards);
+        }
+
+        return new PlayerMovementStep(stagedFleet, advance.Coord, collision, pickupRewards, moveAnimation);
+    }
+
+    private void CommitRealtimePlayerMovementStep(PlayerMovementStep step)
+    {
+        _fleet = step.Fleet;
+
+        if (step.CollisionKind != CollisionKind.None)
+        {
+            _isGameOver = true;
+            _isVictory = false;
+            _gameOverReason = DescribeCollision(step.CollisionKind);
+            _lastCombatEvent = "舰队在自动航行中沉没。";
+            return;
+        }
+
+        if (step.PickupRewards.Count > 0)
+        {
+            var rewardEvents = new List<string>();
+            ApplyRewardPickups(_fleet, step.PickupRewards, previewOnly: false, rewardEvents, _rewards);
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
+        }
+
+        CheckRealtimeVictory();
+        RefreshEnemyIntents();
+    }
+
+    private bool AdvanceRealtimeEnemyMovement()
+    {
+        var batch = BuildEnemyMovementStepBatch(0);
+        if (batch.Moves.Count == 0)
+        {
+            return false;
+        }
+
+        PlayAnimationBatch(batch.Animations, () => CommitRealtimeEnemyMovementStep(batch));
+        return true;
+    }
+
+    private void CommitRealtimeEnemyMovementStep(EnemyMovementStepBatch batch)
+    {
+        foreach (var move in batch.Moves)
+        {
+            move.Enemy.Coord = move.NextCoord;
+        }
+
+        foreach (var move in batch.Moves)
+        {
+            if (!_fleet.Occupies(move.NextCoord))
+            {
+                continue;
+            }
+
+            _isGameOver = true;
+            _isVictory = false;
+            _gameOverReason = "被敌舰撞击";
+            _lastCombatEvent = $"{DescribeEnemyType(move.Enemy.Type)}直接撞入舰队。";
+            break;
+        }
+
+        if (!_isGameOver)
+        {
+            _lastCombatEvent = BuildEnemyMovementSummary(batch.Moves.Count);
+        }
+
+        RefreshEnemyIntents();
+    }
+
+    private void FireRealtimePlayerVolley()
+    {
+        var rewardEvents = new List<string>();
+        var animations = new List<AnimationEvent>();
+        _lastCombatEvent = ResolvePlayerFire(rewardEvents, animations);
+        if (rewardEvents.Count > 0)
+        {
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
+        }
+
+        PlayAnimationBatch(animations, RefreshEnemyIntents);
+    }
+
+    private bool FireRealtimeArtilleryVolley()
+    {
+        var animations = new List<AnimationEvent>();
+        var anyEnemy = false;
+        var spawnedProjectiles = 0;
+
+        foreach (var enemy in _enemies)
+        {
+            if (!enemy.IsAlive || enemy.Type != EnemyType.Artillery)
+            {
+                continue;
+            }
+
+            anyEnemy = true;
+            var attackDirection = GetDirectionToward(enemy.Coord, GetPredictedPlayerCoord());
+            animations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.CannonFire,
+                Duration = 0.3f,
+                FireBatchGroup = EnemyFireBatchGroup,
+                WorldPosition = GetCellCenter(enemy.Coord),
+                Radius = _hexSize * 0.48f,
+                Tint = new Color(0.94f, 0.46f, 0.22f, 0.92f),
+                Direction = attackDirection,
+                FireDirections = new List<int> { attackDirection },
+                CannonEntityKey = enemy,
+            });
+
+            if (TrySpawnEnemyProjectile(enemy.Coord, attackDirection, out var hitFleet))
+            {
+                spawnedProjectiles++;
+            }
+
+            if (hitFleet)
+            {
+                _isGameOver = true;
+                _isVictory = false;
+                _gameOverReason = "被敌方炮火击中";
+                _lastCombatEvent = "炮击哨近距开火命中舰队。";
+                PlayAnimationBatch(animations, RefreshEnemyIntents);
+                return true;
+            }
+        }
+
+        if (!anyEnemy)
+        {
+            return false;
+        }
+
+        _lastCombatEvent = spawnedProjectiles == 0
+            ? "炮击哨完成射击，但火线被地形或占位阻断。"
+            : $"炮击哨发射 {spawnedProjectiles} 枚炮弹。";
+        PlayAnimationBatch(animations, RefreshEnemyIntents);
+        return true;
+    }
+
+    private bool FireRealtimeMineVolley()
+    {
+        var animations = new List<AnimationEvent>();
+        var firingMines = 0;
+        var spawnedProjectiles = 0;
+
+        foreach (var enemy in _enemies)
+        {
+            if (!enemy.IsAlive || enemy.Type != EnemyType.Mine)
+            {
+                continue;
+            }
+
+            firingMines++;
+            animations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.CannonFire,
+                Duration = 0.2f,
+                FireBatchGroup = EnemyFireBatchGroup,
+                WorldPosition = GetCellCenter(enemy.Coord),
+                Radius = _hexSize * 0.38f,
+                Tint = new Color(0.85f, 0.84f, 0.82f, 0.92f),
+                FireDirections = new List<int> { 0, 1, 2, 3, 4, 5 },
+                CannonEntityKey = enemy,
+            });
+
+            for (var direction = 0; direction < HexCoord.Directions.Length; direction++)
+            {
+                if (TrySpawnEnemyProjectile(enemy.Coord, direction, out var hitFleet))
+                {
+                }
+
+                if (!hitFleet)
+                {
+                    continue;
+                }
+
+                _isGameOver = true;
+                _isVictory = false;
+                _gameOverReason = "被敌方炮火击中";
+                _lastCombatEvent = "断脊水雷齐射命中舰队。";
+                PlayAnimationBatch(animations, RefreshEnemyIntents);
+                return true;
+            }
+        }
+
+        if (firingMines == 0)
+        {
+            return false;
+        }
+
+        _lastCombatEvent = spawnedProjectiles == 0
+            ? "断脊水雷齐射受阻，未形成有效火线。"
+            : $"断脊水雷发射 {spawnedProjectiles} 枚炮弹。";
+        PlayAnimationBatch(animations, RefreshEnemyIntents);
+        return true;
+    }
+
+    private void AdvanceRealtimeWaveTick()
+    {
+        _turnCounter++;
+        var rewardEvents = new List<string>();
+        SpawnScheduledEnemiesForTurn(_turnCounter);
+        if (TryAutoSpawnRewardForTurn(_turnCounter, rewardEvents))
+        {
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
+        }
+
+        RefreshEnemyIntents();
+    }
+
+    private bool AdvanceRealtimeProjectileStep(ProjectileOwner owner)
+    {
+        var step = BuildRealtimeProjectileStep(owner);
+        if (step == null)
+        {
+            return false;
+        }
+
+        PlayAnimationBatch(step.MoveAnimations, () => CommitRealtimeProjectileStep(step));
+        return true;
+    }
+
+    private ProjectileStepBatch? BuildRealtimeProjectileStep(ProjectileOwner owner)
+    {
+        var movingProjectiles = owner == ProjectileOwner.Player ? _playerProjectiles : _enemyProjectiles;
+        var opposingProjectiles = owner == ProjectileOwner.Player ? _enemyProjectiles : _playerProjectiles;
+        if (movingProjectiles.Count == 0)
+        {
+            return null;
+        }
+
+        var moves = new List<ProjectileAdvance>();
+        var expiredProjectiles = new List<ProjectileState>();
+        var resolvedProjectiles = new List<ProjectileState>();
+        var pendingEnemyDamage = new Dictionary<EnemyState, int>();
+        var movedProjectiles = new Dictionary<HexCoord, List<ProjectileAdvance>>();
+
+        foreach (var projectile in movingProjectiles)
+        {
+            if (owner == ProjectileOwner.Player && projectile.RealtimeMoveCooldownSeconds > 0.0f)
+            {
+                continue;
+            }
+
+            if (!TryGetProjectileAdvance(projectile, out var nextCoord))
+            {
+                expiredProjectiles.Add(projectile);
+                continue;
+            }
+
+            var advance = new ProjectileAdvance(projectile, nextCoord);
+            moves.Add(advance);
+
+            if (!movedProjectiles.TryGetValue(nextCoord, out var bucket))
+            {
+                bucket = new List<ProjectileAdvance>();
+                movedProjectiles.Add(nextCoord, bucket);
+            }
+
+            bucket.Add(advance);
+        }
+
+        if (moves.Count == 0 && expiredProjectiles.Count == 0)
+        {
+            return null;
+        }
+
+        var moveAnimations = new List<AnimationEvent>();
+        if (moves.Count > 0)
+        {
+            var entityMoves = new List<EntityMove>(moves.Count);
+            foreach (var move in moves)
+            {
+                var isPlayerProjectile = move.Projectile.Owner == ProjectileOwner.Player;
+                entityMoves.Add(new EntityMove
+                {
+                    EntityKey = move.Projectile,
+                    FromWorld = GetCellCenter(move.Projectile.Coord),
+                    ToWorld = GetCellCenter(move.NextCoord),
+                    Scale = isPlayerProjectile ? 0.42f : 0.46f,
+                    Tint = isPlayerProjectile
+                        ? new Color(0.98f, 0.86f, 0.32f, 0.95f)
+                        : new Color(0.94f, 0.46f, 0.22f, 0.95f),
+                });
+            }
+
+            moveAnimations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.ProjectileMove,
+                Duration = owner == ProjectileOwner.Player ? MinimumPlayerProjectileIntervalSeconds : 0.18f,
+                EntityMoves = entityMoves,
+            });
+        }
+
+        var impactAnimations = new List<AnimationEvent>();
+        var playerHits = 0;
+        var projectileDuels = 0;
+        var fleetHit = false;
+
+        foreach (var pair in movedProjectiles)
+        {
+            var cell = pair.Key;
+            var advances = pair.Value;
+            var opposingAtCell = new List<ProjectileState>();
+            foreach (var projectile in opposingProjectiles)
+            {
+                if (projectile.Coord.Equals(cell))
+                {
+                    opposingAtCell.Add(projectile);
+                }
+            }
+
+            if (opposingAtCell.Count > 0)
+            {
+                projectileDuels++;
+                resolvedProjectiles.AddRange(opposingAtCell);
+                foreach (var move in advances)
+                {
+                    resolvedProjectiles.Add(move.Projectile);
+                }
+
+                impactAnimations.Add(new AnimationEvent
+                {
+                    Kind = AnimKind.Flash,
+                    Duration = 0.3f,
+                    WorldPosition = GetCellCenter(cell),
+                    Radius = _hexSize * 0.36f,
+                    Tint = new Color(1.0f, 1.0f, 0.9f, 0.92f),
+                });
+                continue;
+            }
+
+            if (owner == ProjectileOwner.Player)
+            {
+                var enemy = FindEnemyAt(cell);
+                if (enemy == null)
+                {
+                    continue;
+                }
+
+                foreach (var move in advances)
+                {
+                    AccumulatePendingEnemyDamage(enemy, move.Projectile.Damage, move.Projectile.HasExplosive, pendingEnemyDamage);
+                    resolvedProjectiles.Add(move.Projectile);
+                    playerHits++;
+                }
+
+                impactAnimations.Add(new AnimationEvent
+                {
+                    Kind = AnimKind.Explosion,
+                    Duration = 0.4f,
+                    WorldPosition = GetCellCenter(cell),
+                    Radius = _hexSize * 1.1f,
+                });
+                continue;
+            }
+
+            if (!_fleet.Occupies(cell))
+            {
+                continue;
+            }
+
+            foreach (var move in advances)
+            {
+                resolvedProjectiles.Add(move.Projectile);
+            }
+
+            impactAnimations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.Explosion,
+                Duration = 0.45f,
+                WorldPosition = GetCellCenter(cell),
+                Radius = _hexSize * 1.3f,
+            });
+
+            fleetHit = true;
+        }
+
+        foreach (var item in pendingEnemyDamage)
+        {
+            if (item.Key.Health - item.Value > 0)
+            {
+                continue;
+            }
+
+            impactAnimations.Add(new AnimationEvent
+            {
+                Kind = AnimKind.Explosion,
+                Duration = 0.5f,
+                WorldPosition = GetCellCenter(item.Key.Coord),
+                Radius = _hexSize * 1.1f,
+            });
+        }
+
+        return new ProjectileStepBatch(
+            moves,
+            expiredProjectiles,
+            resolvedProjectiles,
+            pendingEnemyDamage,
+            moveAnimations,
+            impactAnimations,
+            expiredProjectiles.Count,
+            playerHits,
+            projectileDuels,
+            fleetHit);
+    }
+
+    private void CommitRealtimeProjectileStep(ProjectileStepBatch step)
+    {
+        CommitProjectileStepMove(step);
+
+        foreach (var move in step.Moves)
+        {
+            if (move.Projectile.Owner == ProjectileOwner.Player && move.Projectile.RealtimeMoveIntervalSeconds > 0.0f)
+            {
+                move.Projectile.RealtimeMoveCooldownSeconds = move.Projectile.RealtimeMoveIntervalSeconds;
+            }
+        }
+
+        foreach (var item in step.PendingEnemyDamage)
+        {
+            item.Key.Health -= item.Value;
+        }
+
+        var rewardEvents = new List<string>();
+        var defeatedEnemies = ResolveDefeatedEnemies(rewardEvents);
+        foreach (var projectile in step.ResolvedProjectiles)
+        {
+            RemoveProjectile(projectile);
+        }
+
+        if (step.FleetHit)
+        {
+            _isGameOver = true;
+            _isVictory = false;
+            _gameOverReason = "被敌方炮火击中";
+        }
+
+        if (rewardEvents.Count > 0)
+        {
+            _lastRewardEvent = BuildRewardSummary(rewardEvents);
+        }
+
+        if (step.PlayerHitCount > 0 || step.ProjectileDuelCount > 0 || step.ExpiredCount > 0 || defeatedEnemies > 0)
+        {
+            var destroyedText = defeatedEnemies > 0 ? $" 击沉 {defeatedEnemies} 艘敌舰。" : string.Empty;
+            _lastCombatEvent = step.FleetHit
+                ? "敌方炮弹命中舰队。"
+                : $"炮弹推进：命中 {step.PlayerHitCount}，对撞 {step.ProjectileDuelCount}，消散 {step.ExpiredCount}。{destroyedText}";
+        }
+
+        RefreshEnemyIntents();
+        CheckRealtimeVictory();
+    }
+
+    private void CheckRealtimeVictory()
+    {
+        if (_fleet.Segments.Count < FleetLengthGoal)
+        {
+            return;
+        }
+
+        _isGameOver = true;
+        _isVictory = true;
+        _gameOverReason = "舰队扩编完成";
     }
 
     private void ContinueProjectilePhase()
@@ -685,20 +1609,24 @@ public partial class MainGameController : Node2D
             stagedFleet.HeadDirection = _grid.RotateDirection(stagedFleet.HeadDirection, turn.Card.TurnDelta);
         }
 
-        var nextHead = stagedFleet.Head.Step(stagedFleet.HeadDirection);
-        var collision = CheckHeadEntry(nextHead, _fleet);
-        var pickupRewardType = collision == CollisionKind.None && _rewards.TryGetValue(nextHead, out var rewardType)
-            ? rewardType
-            : (RewardType?)null;
-        var moveAnimation = BuildFleetStepAnimation(stagedFleet, nextHead);
+        var advance = ResolvePlayerAdvance(stagedFleet);
+        stagedFleet.HeadDirection = advance.Direction;
+        var collision = CheckHeadEntry(advance.Coord, _fleet);
+        var moveAnimation = BuildFleetStepAnimation(stagedFleet, advance.Coord);
 
-        stagedFleet.MoveOneStep(nextHead, _grid);
+        stagedFleet.MoveOneStep(advance.Coord, _grid);
         if (collision == CollisionKind.None && stagedFleet.HasDuplicateCoords())
         {
             collision = CollisionKind.Self;
         }
 
-        return new PlayerMovementStep(stagedFleet, nextHead, collision, pickupRewardType, moveAnimation);
+        IReadOnlyList<KeyValuePair<HexCoord, RewardType>> pickupRewards = Array.Empty<KeyValuePair<HexCoord, RewardType>>();
+        if (collision == CollisionKind.None)
+        {
+            pickupRewards = GetRewardPickups(stagedFleet.Head, _rewards);
+        }
+
+        return new PlayerMovementStep(stagedFleet, advance.Coord, collision, pickupRewards, moveAnimation);
     }
 
     private void CommitPlayerMovementStep(PlayerMovementStep step)
@@ -722,17 +1650,17 @@ public partial class MainGameController : Node2D
             return;
         }
 
-        if (!step.PickupRewardType.HasValue)
+        if (step.PickupRewards.Count == 0)
         {
             ContinuePlayerMovementStep();
             return;
         }
 
-        _rewards.Remove(step.NextHead);
-        ApplyRewardPickup(_fleet, step.PickupRewardType.Value, previewOnly: false, _activeTurn.RewardEvents, _rewards);
+        var pickupAnimations = new List<AnimationEvent>();
+        ApplyRewardPickups(_fleet, step.PickupRewards, previewOnly: false, _activeTurn.RewardEvents, _rewards, pickupAnimations);
 
         PlayAnimationBatch(
-            new List<AnimationEvent> { BuildPickupAnimation(step.NextHead, step.PickupRewardType.Value) },
+            pickupAnimations,
             ContinuePlayerMovementStep);
     }
 
@@ -843,6 +1771,7 @@ public partial class MainGameController : Node2D
 
     private void PlayAnimationBatch(List<AnimationEvent> animEvents, Action onComplete)
     {
+        _animationBatchSequence++;
         _afterAnimationBatch = onComplete;
 
         if (_skipRemainingTurnAnimations || animEvents.Count == 0)
@@ -935,16 +1864,26 @@ public partial class MainGameController : Node2D
     {
         if (_afterAnimationBatch is { } next)
         {
+            var completedSequence = _animationBatchSequence;
             _afterAnimationBatch = null;
             next();
+
+            if (completedSequence != _animationBatchSequence || !_inputLocked)
+            {
+                return;
+            }
+
+            FinalizeAnimationBatchCompletion();
             return;
         }
 
+        FinalizeAnimationBatchCompletion();
+    }
+
+    private void FinalizeAnimationBatchCompletion()
+    {
         ActivatePendingProjectiles();
-        _skipRemainingTurnAnimations = false;
-        _inputLocked = false;
-        UpdateHudState();
-        QueueRedraw();
+        UnlockInputAndFlushBufferedSelection();
     }
 
     private void FinishActiveTurn(bool completeTurn)
@@ -963,10 +1902,7 @@ public partial class MainGameController : Node2D
         _activeTurn = null;
         _afterAnimationBatch = null;
         ActivatePendingProjectiles();
-        _skipRemainingTurnAnimations = false;
-        _inputLocked = false;
-        UpdateHudState();
-        QueueRedraw();
+        UnlockInputAndFlushBufferedSelection();
     }
 
     private void ActivatePendingProjectiles()
@@ -991,7 +1927,6 @@ public partial class MainGameController : Node2D
         SpawnScheduledEnemiesForTurn(_turnCounter);
         TryAutoSpawnRewardForTurn(_turnCounter, rewardEvents);
 
-        FillHand();
         RefreshEnemyIntents();
     }
 
@@ -1077,7 +2012,7 @@ public partial class MainGameController : Node2D
                     enemy.AttackIntentDirection = GetDirectionToward(originAfterMove, GetPredictedPlayerCoord());
                     break;
                 case EnemyType.Mine:
-                    enemy.HasRadialAttackIntent = ShouldMineFireThisTurn(enemy);
+                    enemy.HasRadialAttackIntent = true;
                     break;
             }
         }
@@ -1085,7 +2020,12 @@ public partial class MainGameController : Node2D
 
     private HexCoord GetPredictedPlayerCoord()
     {
-        return _fleet.Head.Step(_fleet.HeadDirection);
+        return ResolvePlayerAdvance(_fleet).Coord;
+    }
+
+    private (HexCoord Coord, int Direction) ResolvePlayerAdvance(FleetState fleet)
+    {
+        return _grid.ResolvePlayerBorderStep(fleet.Head, fleet.HeadDirection);
     }
 
     private SimulationResult ResolveCardMovement(FleetState source, MoveCard card, bool previewOnly, List<AnimationEvent>? animEvents = null)
@@ -1104,43 +2044,28 @@ public partial class MainGameController : Node2D
                 simulated.HeadDirection = _grid.RotateDirection(simulated.HeadDirection, card.TurnDelta);
             }
 
-            var nextHead = simulated.Head.Step(simulated.HeadDirection);
-            headPath.Add(nextHead);
+            var advance = ResolvePlayerAdvance(simulated);
+            simulated.HeadDirection = advance.Direction;
+            headPath.Add(advance.Coord);
 
-            var collision = CheckHeadEntry(nextHead, simulated);
+            var collision = CheckHeadEntry(advance.Coord, simulated);
             if (collision != CollisionKind.None)
             {
-                return SimulationResult.Fatal(simulated, headPath, rewardEvents, collision, nextHead);
-            }
-
-            var rewardAtStep = rewardMap.TryGetValue(nextHead, out var rewardType);
-            if (rewardAtStep)
-            {
-                rewardMap.Remove(nextHead);
-                ApplyRewardPickup(simulated, rewardType, previewOnly, rewardEvents, rewardMap);
-
-                if (animEvents != null)
-                {
-                    animEvents.Add(new AnimationEvent
-                    {
-                        Kind = AnimKind.Pickup,
-                        Duration = 0.6f,
-                        WorldPosition = GetCellCenter(nextHead),
-                        FloatingText = DescribeRewardType(rewardType),
-                    });
-                }
+                return SimulationResult.Fatal(simulated, headPath, rewardEvents, collision, advance.Coord);
             }
 
             if (animEvents != null)
             {
-                RecordFleetStepAnimation(simulated, nextHead, animEvents);
+                RecordFleetStepAnimation(simulated, advance.Coord, animEvents);
             }
 
-            simulated.MoveOneStep(nextHead, _grid);
+            simulated.MoveOneStep(advance.Coord, _grid);
             if (simulated.HasDuplicateCoords())
             {
-                return SimulationResult.Fatal(simulated, headPath, rewardEvents, CollisionKind.Self, nextHead);
+                return SimulationResult.Fatal(simulated, headPath, rewardEvents, CollisionKind.Self, advance.Coord);
             }
+
+            ApplyRewardPickups(simulated, GetRewardPickups(simulated.Head, rewardMap), previewOnly, rewardEvents, rewardMap, animEvents);
         }
 
         return SimulationResult.Success(simulated, headPath, rewardEvents);
@@ -1188,6 +2113,49 @@ public partial class MainGameController : Node2D
         };
     }
 
+    private IEnumerable<HexCoord> EnumerateRewardPickupArea(HexCoord center)
+    {
+        yield return center;
+
+        foreach (var neighbor in _grid.GetNeighbors(center))
+        {
+            yield return neighbor;
+        }
+    }
+
+    private List<KeyValuePair<HexCoord, RewardType>> GetRewardPickups(HexCoord center, IDictionary<HexCoord, RewardType> rewardMap)
+    {
+        var pickups = new List<KeyValuePair<HexCoord, RewardType>>();
+        foreach (var cell in EnumerateRewardPickupArea(center))
+        {
+            if (rewardMap.TryGetValue(cell, out var rewardType))
+            {
+                pickups.Add(new KeyValuePair<HexCoord, RewardType>(cell, rewardType));
+            }
+        }
+
+        return pickups;
+    }
+
+    private void ApplyRewardPickups(FleetState fleet, IReadOnlyList<KeyValuePair<HexCoord, RewardType>> pickups,
+        bool previewOnly, List<string> rewardEvents, IDictionary<HexCoord, RewardType> rewardMap,
+        List<AnimationEvent>? pickupAnimations = null)
+    {
+        foreach (var pickup in pickups)
+        {
+            rewardMap.Remove(pickup.Key);
+        }
+
+        foreach (var pickup in pickups)
+        {
+            ApplyRewardPickup(fleet, pickup.Value, previewOnly, rewardEvents, rewardMap);
+            if (pickupAnimations != null)
+            {
+                pickupAnimations.Add(BuildPickupAnimation(pickup.Key, pickup.Value));
+            }
+        }
+    }
+
     private void ApplyRewardPickup(FleetState fleet, RewardType rewardType, bool previewOnly, List<string> rewardEvents, IDictionary<HexCoord, RewardType> rewardMap)
     {
         if (previewOnly)
@@ -1198,6 +2166,11 @@ public partial class MainGameController : Node2D
             }
 
             return;
+        }
+
+        if (rewardType == RewardType.GrowthModule)
+        {
+            _pendingGrowthModuleRespawnTurn = _turnCounter + 1;
         }
 
         switch (rewardType)
@@ -1214,8 +2187,7 @@ public partial class MainGameController : Node2D
 
                 break;
             case RewardType.CommandReload:
-                _hand.Clear();
-                FillHand();
+                FillHand(randomizeDirections: true);
                 rewardEvents.Add("拾取指令重载，当前手牌已重抽。");
                 break;
             case RewardType.FirepowerUpgrade:
@@ -1246,23 +2218,23 @@ public partial class MainGameController : Node2D
             switch (_random.RandiRange(0, 3))
             {
                 case 0:
-                    if (segment.Range >= MaximumRange)
+                    if (GetPlayerProjectileIntervalSeconds(segment) <= MinimumPlayerProjectileIntervalSeconds + 0.0001f)
                     {
                         continue;
                     }
 
-                    segment.Range++;
-                    return $"火力强化：{DescribeSegment(segmentIndex)}射程提升至 {segment.Range}。";
+                    segment.ProjectileIntervalBoostLevel++;
+                    return $"火力强化：{DescribeSegment(segmentIndex)}炮弹推进间隔缩短至 {GetPlayerProjectileIntervalSeconds(segment):0.00} 秒。";
                 case 1:
                     segment.Damage++;
                     return $"火力强化：{DescribeSegment(segmentIndex)}伤害提升至 {segment.Damage}。";
                 case 2:
-                    if (segment.ScatterLevel >= 2)
+                    if (segment.ScatterLevel >= 1)
                     {
                         continue;
                     }
 
-                    segment.ScatterLevel++;
+                    segment.ScatterLevel = 1;
                     return $"火力强化：{DescribeSegment(segmentIndex)}获得{DescribeScatter(segment.ScatterLevel)}。";
                 case 3:
                     if (segment.HasExplosive)
@@ -1278,44 +2250,15 @@ public partial class MainGameController : Node2D
 
     private string ApplyCardCalibration()
     {
-        var poolIndices = new List<int>();
-        if (_straightPoolUpgrades < MaximumCardMoveBonus)
-        {
-            poolIndices.Add(0);
-        }
+        ApplyPlayerSpeedBoost();
+        return "拾取指令校准，获得 3 秒加速。";
+    }
 
-        if (_leftPoolUpgrades < MaximumCardMoveBonus)
-        {
-            poolIndices.Add(1);
-        }
-
-        if (_rightPoolUpgrades < MaximumCardMoveBonus)
-        {
-            poolIndices.Add(2);
-        }
-
-        if (poolIndices.Count == 0)
-        {
-            _hand.Clear();
-            FillHand();
-            return "拾取指令校准，但所有方向池均已满级，效果转为指令重载。";
-        }
-
-        var selected = poolIndices[_random.RandiRange(0, poolIndices.Count - 1)];
-        var poolName = selected switch
-        {
-            0 => "直行池",
-            1 => "左转池",
-            _ => "右转池",
-        };
-        var newLevel = selected switch
-        {
-            0 => ++_straightPoolUpgrades,
-            1 => ++_leftPoolUpgrades,
-            _ => ++_rightPoolUpgrades,
-        };
-
-        return $"拾取指令校准，{poolName}升级至 +{newLevel} 移动距离。";
+    private float GetPlayerProjectileIntervalSeconds(FleetSegmentState segment)
+    {
+        return Mathf.Max(
+            MinimumPlayerProjectileIntervalSeconds,
+            PlayerProjectileIntervalSeconds - segment.ProjectileIntervalBoostLevel * PlayerProjectileIntervalBoostSeconds);
     }
 
     private static string DescribeSegment(int segmentIndex)
@@ -1325,12 +2268,7 @@ public partial class MainGameController : Node2D
 
     private static string DescribeScatter(int scatterLevel)
     {
-        return scatterLevel switch
-        {
-            1 => "散射 I",
-            2 => "散射 II",
-            _ => "散射",
-        };
+        return "散射";
     }
 
     private CollisionKind CheckHeadEntry(HexCoord target, FleetState fleet)
@@ -1389,7 +2327,7 @@ public partial class MainGameController : Node2D
             var segment = _fleet.Segments[index];
             var isHead = index == 0;
             var baseDirection = isHead ? _fleet.HeadDirection : segment.EntryDirection;
-            var fireDirections = BuildFireDirections(baseDirection, isHead);
+            var fireDirections = BuildFireDirections(baseDirection, isHead, segment.ScatterLevel);
 
             if (animEvents != null && fireDirections.Count > 0)
             {
@@ -1476,7 +2414,13 @@ public partial class MainGameController : Node2D
 
             if (step == segment.Range)
             {
-                var projectile = new ProjectileState(firstCell, fireDirection, segment.Damage, ProjectileOwner.Player, segment.HasExplosive);
+                var projectile = new ProjectileState(
+                    firstCell,
+                    fireDirection,
+                    segment.Damage,
+                    ProjectileOwner.Player,
+                    segment.HasExplosive,
+                    GetPlayerProjectileIntervalSeconds(segment));
                 _pendingPlayerProjectiles.Add(projectile);
                 return ShotResolution.SpawnedProjectile;
             }
@@ -1487,17 +2431,23 @@ public partial class MainGameController : Node2D
         return ShotResolution.None;
     }
 
-    private List<int> BuildFireDirections(int baseDirection, bool includeForward)
+    private List<int> BuildFireDirections(int baseDirection, bool isHead, int scatterLevel)
     {
         var directions = new List<int>();
 
-        if (includeForward)
+        if (isHead)
         {
             directions.Add(HexCoord.WrapDirection(baseDirection));
         }
 
         directions.Add(HexCoord.WrapDirection(baseDirection - 1));
         directions.Add(HexCoord.WrapDirection(baseDirection + 1));
+
+        if (scatterLevel >= 1)
+        {
+            directions.Add(HexCoord.WrapDirection(baseDirection - 2));
+            directions.Add(HexCoord.WrapDirection(baseDirection + 2));
+        }
 
         return directions;
     }
@@ -2217,12 +3167,12 @@ public partial class MainGameController : Node2D
     private bool TryDropRewardAt(HexCoord origin, out RewardType rewardType)
     {
         rewardType = RewardType.GrowthModule;
-        if (_rewards.Count >= MaximumRewardsOnField || _random.Randf() >= 0.5f)
+        if (_random.Randf() >= 0.5f)
         {
             return false;
         }
 
-        rewardType = RollRewardType();
+        rewardType = RollRewardTypeForSpawn();
         return TryPlaceRewardAtOrAdjacent(origin, rewardType);
     }
 
@@ -2271,25 +3221,55 @@ public partial class MainGameController : Node2D
         return RewardType.CardCalibration;
     }
 
+    private RewardType RollRewardTypeForSpawn()
+    {
+        if (!HasGrowthModuleOnField() && !_pendingGrowthModuleRespawnTurn.HasValue)
+        {
+            return RollRewardType();
+        }
+
+        while (true)
+        {
+            var rewardType = RollRewardType();
+            if (rewardType != RewardType.GrowthModule)
+            {
+                return rewardType;
+            }
+        }
+    }
+
     private bool TryAutoSpawnRewardForTurn(int turn, List<string> rewardEvents)
     {
-        if ((turn % RewardAutoSpawnInterval) != 0 || _rewards.Count >= MaximumRewardsOnField)
+        var spawnedReward = false;
+
+        if (_pendingGrowthModuleRespawnTurn.HasValue && turn >= _pendingGrowthModuleRespawnTurn.Value)
         {
-            return false;
+            if (TrySpawnRandomReward(forcedRewardType: RewardType.GrowthModule))
+            {
+                _pendingGrowthModuleRespawnTurn = null;
+                rewardEvents.Add("海面刷新了一件新的增殖模块。");
+                spawnedReward = true;
+            }
+        }
+
+        if ((turn % RewardAutoSpawnInterval) != 0)
+        {
+            return spawnedReward;
         }
 
         if (!TrySpawnRandomReward())
         {
-            return false;
+            return spawnedReward;
         }
 
         rewardEvents.Add("海面刷新了一件新的补给。");
         return true;
     }
 
-    private bool TrySpawnRandomReward(int minimumDistanceFromExistingRewards = 0)
+    private bool TrySpawnRandomReward(int minimumDistanceFromExistingRewards = 0, RewardType? forcedRewardType = null)
     {
-        if (_rewards.Count >= MaximumRewardsOnField)
+        var rewardType = forcedRewardType ?? RollRewardTypeForSpawn();
+        if (!CanAddReward(rewardType))
         {
             return false;
         }
@@ -2317,7 +3297,7 @@ public partial class MainGameController : Node2D
         }
 
         var coord = candidates[_random.RandiRange(0, candidates.Count - 1)];
-        _rewards[coord] = RollRewardType();
+        _rewards[coord] = rewardType;
         return true;
     }
 
@@ -2337,6 +3317,7 @@ public partial class MainGameController : Node2D
     private bool IsRewardSpawnCellOpen(HexCoord cell)
     {
         return _grid.Contains(cell)
+            && GetBoundaryDistance(cell) >= RewardSpawnMinimumBoundaryDistance
             && !_reefCells.Contains(cell)
             && !_fleet.Occupies(cell)
             && !HasEnemyAt(cell)
@@ -2346,6 +3327,11 @@ public partial class MainGameController : Node2D
 
     private bool TryPlaceRewardAtOrAdjacent(HexCoord origin, RewardType rewardType)
     {
+        if (!CanAddReward(rewardType))
+        {
+            return false;
+        }
+
         if (IsRewardSpawnCellOpen(origin))
         {
             _rewards[origin] = rewardType;
@@ -2483,6 +3469,50 @@ public partial class MainGameController : Node2D
         _preview = null;
         _selectedCard = null;
         _selectedCardIndex = -1;
+        _isPreviewPaused = false;
+    }
+
+    private void AdvanceCardCooldowns(float deltaSeconds)
+    {
+        var cardUiChanged = false;
+
+        for (var index = 0; index < _hand.Length; index++)
+        {
+            if (_cardCooldownRemainingSeconds[index] <= 0.0f)
+            {
+                continue;
+            }
+
+            _cardCooldownRemainingSeconds[index] = Mathf.Max(0.0f, _cardCooldownRemainingSeconds[index] - deltaSeconds);
+            if (_cardCooldownRemainingSeconds[index] == 0.0f && _hand[index] == null)
+            {
+                DrawCardForSlot(index);
+            }
+
+            cardUiChanged = true;
+        }
+
+        if (cardUiChanged)
+        {
+            UpdateCardButtons();
+        }
+    }
+
+    private void UnlockInputAndFlushBufferedSelection()
+    {
+        _skipRemainingTurnAnimations = false;
+        _inputLocked = false;
+
+        var pendingIndex = _pendingCardSelectionIndex;
+        _pendingCardSelectionIndex = -1;
+        if (!_isGameOver && pendingIndex >= 0 && pendingIndex < _hand.Length)
+        {
+            ApplyCardSelection(pendingIndex);
+            return;
+        }
+
+        UpdateHudState();
+        QueueRedraw();
     }
 
     private void ShowGameOver()
@@ -2490,7 +3520,7 @@ public partial class MainGameController : Node2D
         _gameOverOverlay.Visible = true;
         _gameOverTitleLabel.Text = _isVictory ? "胜利" : "舰队沉没";
         _gameOverReasonLabel.Text = _gameOverReason;
-        _gameOverStatsLabel.Text = $"第 {_turnCounter} 回合  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}";
+        _gameOverStatsLabel.Text = $"第 {_turnCounter} 波次  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}";
         _gameOverRestartButton.GrabFocus();
     }
 
@@ -2502,6 +3532,8 @@ public partial class MainGameController : Node2D
         UpdateRewardLabel();
         UpdateCardButtons();
         _confirmButton.Disabled = _isGameOver || _selectedCard == null;
+        _pauseButton.Text = IsGamePaused ? "继续" : "暂停";
+        _pauseButton.Disabled = _isGameOver;
 
         if (_isGameOver && !_gameOverOverlay.Visible)
         {
@@ -2514,24 +3546,60 @@ public partial class MainGameController : Node2D
         if (_isGameOver)
         {
             var resultText = _isVictory ? "胜利" : "失败";
-            _statusLabel.Text = $"回合 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{resultText}: {_gameOverReason}";
+            _statusLabel.Text = $"波次 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{resultText}: {_gameOverReason}";
             return;
         }
 
-        var detail = "选择一张指令卡查看预览。";
+        var detail = "点击一张指令卡可暂停并查看预览。";
         if (_selectedCard != null && _preview != null)
         {
             detail = _preview.IsFatal
                 ? $"预览危险: {DescribeCollision(_preview.CollisionKind)}"
                 : $"已选择 {_selectedCard.Name}: {_selectedCard.Summary}";
         }
+        else if (_playerBoostRemainingSeconds > 0.0f || _playerFireBoostRemainingSeconds > 0.0f)
+        {
+            var moveBoostText = _playerBoostRemainingSeconds > 0.0f
+                ? $"加速 {Mathf.CeilToInt(_playerBoostRemainingSeconds)} 秒"
+                : string.Empty;
+            var fireBoostText = _playerFireBoostRemainingSeconds > 0.0f
+                ? $"射速提升 {Mathf.CeilToInt(_playerFireBoostRemainingSeconds)} 秒"
+                : string.Empty;
 
-        _statusLabel.Text = $"回合 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{detail}";
+            if (!string.IsNullOrEmpty(moveBoostText) && !string.IsNullOrEmpty(fireBoostText))
+            {
+                detail = $"舰队增益: {moveBoostText}，{fireBoostText}。";
+            }
+            else
+            {
+                detail = $"舰队增益: {moveBoostText}{fireBoostText}。";
+            }
+        }
+
+        _statusLabel.Text = $"波次 {_turnCounter}  舰队长度 {_fleet.Segments.Count}/{FleetLengthGoal}\n{detail}";
     }
 
     private void UpdateHintLabel()
     {
-        _hintLabel.Text = "敌军会显示移动/开火意图。拾取补给会在移动中立即生效。";
+        if (_isGameOver)
+        {
+            _hintLabel.Text = "点击重新开始以生成新的战局。";
+            return;
+        }
+
+        if (_isPreviewPaused)
+        {
+            _hintLabel.Text = "游戏已暂停。按住左键可拖动画面，点右上角继续会取消当前指令预览。";
+            return;
+        }
+
+        if (_isUserPaused)
+        {
+            _hintLabel.Text = "游戏已暂停。按住左键可拖动画面，点右上角继续。";
+            return;
+        }
+
+        _hintLabel.Text = "按住左键可拖动画面。敌军会显示移动或开火意图，选择指令时游戏会暂停。";
     }
 
     private void UpdateHoverTooltip(Vector2 localMousePosition, Vector2 screenMousePosition)
@@ -2577,7 +3645,7 @@ public partial class MainGameController : Node2D
 
         if (_fleet.Occupies(coord))
         {
-            lines.Add($"我方舰队：指令卡决定航向与步数，当前长度 {_fleet.Segments.Count}。" );
+            lines.Add($"我方舰队：指令卡决定航向；紧急加速、左漂移、右漂移确认后可获得 3 秒射速提升，其余指令确认后可获得 3 秒加速；指令校准可获得 3 秒加速，当前长度 {_fleet.Segments.Count}。" );
         }
 
         var enemy = FindEnemyAt(coord);
@@ -2628,16 +3696,16 @@ public partial class MainGameController : Node2D
         if (playerProjectileCount > 0)
         {
             lines.Add(playerProjectileCount == 1
-                ? $"己方炮弹：每回合前进 {ProjectileStepsPerPhase} 格，可拦截敌方炮弹。"
-                : $"己方炮弹 x{playerProjectileCount}：每回合前进 {ProjectileStepsPerPhase} 格，可拦截敌方炮弹。");
+                ? "己方炮弹：按发射舰段的推进间隔前进，可拦截敌方炮弹。"
+                : $"己方炮弹 x{playerProjectileCount}：按发射舰段的推进间隔前进，可拦截敌方炮弹。");
         }
 
         var enemyProjectileCount = CountProjectilesAt(_enemyProjectiles, coord);
         if (enemyProjectileCount > 0)
         {
             lines.Add(enemyProjectileCount == 1
-                ? $"敌方炮弹：每回合前进 {ProjectileStepsPerPhase} 格，命中舰队即失败。"
-                : $"敌方炮弹 x{enemyProjectileCount}：每回合前进 {ProjectileStepsPerPhase} 格，命中舰队即失败。");
+                ? "敌方炮弹：每 0.5 秒前进 1 格，命中舰队即失败。"
+                : $"敌方炮弹 x{enemyProjectileCount}：每 0.5 秒前进 1 格，命中舰队即失败。");
         }
     }
 
@@ -2659,11 +3727,11 @@ public partial class MainGameController : Node2D
     {
         var effect = rewardType switch
         {
-            RewardType.GrowthModule => "驶入后会让舰队增长 1 节。",
-            RewardType.CommandReload => "驶入后会立刻补满手牌。",
-            RewardType.FirepowerUpgrade => "驶入后会强化一节舰船的火力。",
-            RewardType.CardCalibration => "驶入后会提升后续抽到的指令卡步数。",
-            _ => "驶入后会立刻生效。",
+            RewardType.GrowthModule => "进入奖励格或其相邻格后会让舰队增长 1 节。",
+            RewardType.CommandReload => "进入奖励格或其相邻格后会立刻补满手牌。",
+            RewardType.FirepowerUpgrade => "进入奖励格或其相邻格后会强化一节舰船的火力。",
+            RewardType.CardCalibration => "进入奖励格或其相邻格后会立刻获得 3 秒加速。",
+            _ => "进入奖励格或其相邻格后会立刻生效。",
         };
 
         return $"{DescribeRewardType(rewardType)}：{effect}";
@@ -2699,7 +3767,20 @@ public partial class MainGameController : Node2D
 
     private void UpdateRewardLabel()
     {
-        _rewardLabel.Text = $"奖励 {_rewards.Count}/{MaximumRewardsOnField}  池 +{_straightPoolUpgrades}/{_leftPoolUpgrades}/{_rightPoolUpgrades}\n{_lastRewardEvent}";
+        var moveBoostText = _playerBoostRemainingSeconds > 0.0f
+            ? $"加速 {Mathf.CeilToInt(_playerBoostRemainingSeconds)} 秒"
+            : string.Empty;
+        var fireBoostText = _playerFireBoostRemainingSeconds > 0.0f
+            ? $"射速提升 {Mathf.CeilToInt(_playerFireBoostRemainingSeconds)} 秒"
+            : string.Empty;
+        var boostText = string.IsNullOrEmpty(moveBoostText) && string.IsNullOrEmpty(fireBoostText)
+            ? "增益 无"
+            : string.IsNullOrEmpty(moveBoostText)
+                ? fireBoostText
+                : string.IsNullOrEmpty(fireBoostText)
+                    ? moveBoostText
+                    : $"{moveBoostText} / {fireBoostText}";
+        _rewardLabel.Text = $"奖励 {_rewards.Count}/{MaximumRewardsOnField}  {boostText}\n{_lastRewardEvent}";
     }
 
     private void UpdateCardButtons()
@@ -2707,20 +3788,28 @@ public partial class MainGameController : Node2D
         for (var index = 0; index < _cardButtons.Count; index++)
         {
             var button = _cardButtons[index];
-            if (index >= _hand.Count)
-            {
-                button.Visible = false;
-                continue;
-            }
-
             var card = _hand[index];
+            var cooldownBar = _cardCooldownBars[index];
+            var isCoolingDown = _cardCooldownRemainingSeconds[index] > 0.0f;
+
             button.Visible = true;
-            button.Disabled = _isGameOver;
-            button.Icon = _placeholder;
-            button.Text = BuildCardLabel(card, isSelected: index == _selectedCardIndex);
-            button.Modulate = index == _selectedCardIndex
+            button.Disabled = _isGameOver || card == null;
+            button.Icon = card switch
+            {
+                null => null,
+                _ when card.TurnDelta == 0 => _forwardInstructionTexture,
+                _ when card.TurnDelta < 0 => _leftTurnInstructionTexture,
+                _ => _rightTurnInstructionTexture,
+            };
+            button.Text = card == null
+                ? string.Empty
+                : BuildCardLabel(card, isSelected: index == _selectedCardIndex);
+            button.Modulate = index == _selectedCardIndex && card != null
                 ? new Color(1.0f, 0.92f, 0.75f, 1.0f)
                 : Colors.White;
+
+            cooldownBar.Visible = isCoolingDown;
+            cooldownBar.Value = _cardCooldownRemainingSeconds[index];
         }
     }
 
@@ -2762,13 +3851,22 @@ public partial class MainGameController : Node2D
         var cardHeight = Mathf.Max(36.0f, _baseCardButtonSize.Y * _uiScale);
         var cardFontSize = Mathf.Max(10, Mathf.RoundToInt(_baseCardFontSize * _uiScale));
         var cardIconWidth = Mathf.Max(12, Mathf.RoundToInt(cardHeight * 0.42f));
+        var cooldownBarHeight = Mathf.Max(4.0f, cardHeight * 0.1f);
+        var cooldownBarInset = Mathf.Max(4.0f, cardHeight * 0.08f);
 
-        foreach (var button in _cardButtons)
+        for (var index = 0; index < _cardButtons.Count; index++)
         {
+            var button = _cardButtons[index];
             button.CustomMinimumSize = new Vector2(cardWidth, cardHeight);
             button.AddThemeFontSizeOverride("font_size", cardFontSize);
             button.AddThemeConstantOverride("icon_max_width", cardIconWidth);
             button.ExpandIcon = true;
+
+            var cooldownBar = _cardCooldownBars[index];
+            cooldownBar.OffsetLeft = cooldownBarInset;
+            cooldownBar.OffsetTop = -(cooldownBarInset + cooldownBarHeight);
+            cooldownBar.OffsetRight = -cooldownBarInset;
+            cooldownBar.OffsetBottom = -cooldownBarInset;
         }
 
         _statusLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseStatusFontSize * _uiScale)));
@@ -2782,11 +3880,21 @@ public partial class MainGameController : Node2D
         _confirmButton.CustomMinimumSize = new Vector2(confirmWidth, confirmHeight);
         _confirmButton.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_baseConfirmFontSize * _uiScale)));
 
+        var pauseWidth = Mathf.Min(_basePauseButtonSize.X * _uiScale, viewportSize.X * 0.28f);
+        var pauseHeight = Mathf.Max(32.0f, _basePauseButtonSize.Y * _uiScale);
+        _pauseButton.CustomMinimumSize = new Vector2(pauseWidth, pauseHeight);
+        _pauseButton.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_basePauseFontSize * _uiScale)));
+        _pauseButton.OffsetLeft = -hudMargin - pauseWidth;
+        _pauseButton.OffsetTop = hudMargin;
+        _pauseButton.OffsetRight = -hudMargin;
+        _pauseButton.OffsetBottom = hudMargin + pauseHeight;
+
         _gameOverTitleLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(18, Mathf.RoundToInt(_baseGameOverTitleFontSize * _uiScale * 2.0f)));
         _gameOverReasonLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseGameOverReasonFontSize * _uiScale)));
         _gameOverStatsLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseGameOverStatsFontSize * _uiScale)));
 
         RecalculateBoardLayout();
+        RefreshCameraPosition();
     }
 
     private void RecalculateBoardLayout()
@@ -2806,10 +3914,17 @@ public partial class MainGameController : Node2D
         var unitHeight = (_baseBoundsMax.Y - _baseBoundsMin.Y) + 2.0f;
         var sizeX = availableRect.Size.X / unitWidth;
         var sizeY = availableRect.Size.Y / unitHeight;
-        _hexSize = Mathf.Clamp(Mathf.Min(sizeX, sizeY), MinimumHexSize, MaximumHexSize);
+        var fittedHexSize = Mathf.Min(sizeX, sizeY);
+        _hexSize = Mathf.Clamp(fittedHexSize * BoardScaleMultiplier, MinimumHexSize, MaximumHexSize * BoardScaleMultiplier);
 
         var baseCenter = (_baseBoundsMin + _baseBoundsMax) * 0.5f;
         _boardOrigin = availableRect.Position + (availableRect.Size * 0.5f) - (baseCenter * _hexSize);
+    }
+
+    private void RefreshCameraPosition()
+    {
+        _boardCamera.Position = (GetViewportRect().Size * 0.5f) + _cameraPanOffset;
+        _boardCamera.Zoom = Vector2.One * _cameraZoom;
     }
 
     private void OnViewportSizeChanged()
@@ -2845,12 +3960,35 @@ public partial class MainGameController : Node2D
         foreach (var reef in _reefCells)
         {
             var center = GetCellCenter(reef);
-            DrawMarker(center, _hexSize * 1.15f, Colors.White, 0.0f, _reefTexture);
+            var texture = _reefTexturesByCell.TryGetValue(reef, out var selectedTexture)
+                ? selectedTexture
+                : _reefTexture;
+            DrawMarker(center, _hexSize * 1.15f, Colors.White, 0.0f, texture);
         }
     }
 
     private void DrawRewards()
     {
+        var pickableCells = new HashSet<HexCoord>();
+        foreach (var rewardCoord in _rewards.Keys)
+        {
+            foreach (var cell in EnumerateRewardPickupArea(rewardCoord))
+            {
+                if (_grid.Contains(cell))
+                {
+                    pickableCells.Add(cell);
+                }
+            }
+        }
+
+        foreach (var cell in pickableCells)
+        {
+            DrawHexOutline(
+                BuildHexPoints(GetCellCenter(cell), _hexSize * 0.90f),
+                new Color(0.96f, 0.86f, 0.42f, 0.70f),
+                Mathf.Max(1.0f, _hexSize * 0.06f));
+        }
+
         foreach (var reward in _rewards)
         {
             var center = GetCellCenter(reward.Key);
@@ -2865,7 +4003,7 @@ public partial class MainGameController : Node2D
             };
 
             DrawCircle(center, Mathf.Max(2.0f, _hexSize * 0.16f), new Color(glowColor.R, glowColor.G, glowColor.B, 0.36f));
-            DrawMarker(center, _hexSize * 0.58f, Colors.White, 0.0f, rewardTexture);
+            DrawMarker(center, _hexSize * 1.16f, Colors.White, 0.0f, rewardTexture);
         }
     }
 
@@ -3055,7 +4193,7 @@ public partial class MainGameController : Node2D
             }
 
             var segment = _fleet.Segments[index];
-            DrawMarker(center, _hexSize * 0.95f, new Color(0.38f, 0.72f, 0.96f, 1.0f), 0.0f);
+            DrawPlayerFleetMarker(center, isHead: false, scale: 2f, alpha: 1.0f);
             DrawDirectionIndicator(center, segment.EntryDirection, new Color(1.0f, 1.0f, 1.0f, 0.9f));
         }
 
@@ -3070,9 +4208,8 @@ public partial class MainGameController : Node2D
             return;
         }
 
-        var rotation = DirectionToAngle(_fleet.HeadDirection);
-        DrawMarker(headCenter, _hexSize * 1.08f, new Color(1.0f, 0.78f, 0.25f, 1.0f), rotation);
-        DrawDirectionIndicator(headCenter, _fleet.HeadDirection, new Color(0.12f, 0.16f, 0.24f, 1.0f));
+        DrawPlayerFleetMarker(headCenter, isHead: true, scale: 2f, alpha: 1.0f);
+        DrawDirectionIndicator(headCenter, _fleet.HeadDirection, new Color(1.0f, 1.0f, 1.0f, 1.0f));
     }
 
     private void DrawActiveEffects()
@@ -3123,7 +4260,7 @@ public partial class MainGameController : Node2D
         if (ThemeDB.FallbackFont != null)
         {
             DrawString(ThemeDB.FallbackFont, effect.Position + new Vector2(0, offsetY), effect.FloatingText,
-                HorizontalAlignment.Center, -1, Mathf.Max(10, Mathf.RoundToInt(_baseCardFontSize * _uiScale)),
+                HorizontalAlignment.Center, -1, Mathf.Max(10, Mathf.RoundToInt(_hexSize * 0.95f)),
                 new Color(0.98f, 0.86f, 0.32f, alpha));
         }
     }
@@ -3184,24 +4321,15 @@ public partial class MainGameController : Node2D
             var segment = fleet.Segments[index];
             var segmentKey = $"fleet_{index}";
             var center = _coordinator.GetPosition(segmentKey);
-            var tint = isGhost
-                ? new Color(0.65f, 0.85f, 1.0f, alpha)
-                : new Color(0.38f, 0.72f, 0.96f, alpha);
-
-            DrawMarker(center, _hexSize * 0.95f, tint, 0.0f);
+            DrawPlayerFleetMarker(center, isHead: false, scale: 0.95f, alpha);
             DrawDirectionIndicator(center, segment.EntryDirection, new Color(1.0f, 1.0f, 1.0f, alpha * 0.9f));
         }
 
         var head = fleet.Segments[0];
         var headKey = "fleet_0";
         var headCenter = _coordinator.GetPosition(headKey);
-        var headTint = isGhost
-            ? new Color(1.0f, 0.84f, 0.39f, alpha)
-            : new Color(1.0f, 0.78f, 0.25f, alpha);
-        var rotation = DirectionToAngle(fleet.HeadDirection);
-
-        DrawMarker(headCenter, _hexSize * 1.08f, headTint, rotation);
-        DrawDirectionIndicator(headCenter, fleet.HeadDirection, new Color(0.12f, 0.16f, 0.24f, alpha));
+        DrawPlayerFleetMarker(headCenter, isHead: true, scale: 1.08f, alpha);
+        DrawDirectionIndicator(headCenter, fleet.HeadDirection, new Color(1.0f, 1.0f, 1.0f, alpha));
     }
 
     private Vector2 GetCellCenter(HexCoord coord)
@@ -3228,6 +4356,12 @@ public partial class MainGameController : Node2D
             var nextIndex = (index + 1) % points.Length;
             DrawLine(points[index], points[nextIndex], color, width, true);
         }
+    }
+
+    private void DrawPlayerFleetMarker(Vector2 center, bool isHead, float scale, float alpha)
+    {
+        var texture = isHead ? _playerHeadBoatTexture : _playerBoatTexture;
+        DrawMarker(center, _hexSize * scale, new Color(1.0f, 1.0f, 1.0f, alpha), 0.0f, texture);
     }
 
     private void DrawMarker(Vector2 center, float pixelSize, Color tint, float rotationRadians, Texture2D? texture = null)
@@ -3459,12 +4593,13 @@ public partial class MainGameController : Node2D
 
     private sealed class PlayerMovementStep
     {
-        public PlayerMovementStep(FleetState fleet, HexCoord nextHead, CollisionKind collisionKind, RewardType? pickupRewardType, AnimationEvent moveAnimation)
+        public PlayerMovementStep(FleetState fleet, HexCoord nextHead, CollisionKind collisionKind,
+            IReadOnlyList<KeyValuePair<HexCoord, RewardType>> pickupRewards, AnimationEvent moveAnimation)
         {
             Fleet = fleet;
             NextHead = nextHead;
             CollisionKind = collisionKind;
-            PickupRewardType = pickupRewardType;
+            PickupRewards = pickupRewards;
             MoveAnimation = moveAnimation;
         }
 
@@ -3474,7 +4609,7 @@ public partial class MainGameController : Node2D
 
         public CollisionKind CollisionKind { get; }
 
-        public RewardType? PickupRewardType { get; }
+        public IReadOnlyList<KeyValuePair<HexCoord, RewardType>> PickupRewards { get; }
 
         public AnimationEvent MoveAnimation { get; }
     }

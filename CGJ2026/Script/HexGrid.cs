@@ -49,6 +49,27 @@ public sealed class HexGrid
         return HexCoord.WrapDirection(direction + delta);
     }
 
+    public (HexCoord Coord, int Direction) ResolvePlayerBorderStep(HexCoord origin, int direction)
+    {
+        var wrappedDirection = HexCoord.WrapDirection(direction);
+        var attempted = origin.Step(wrappedDirection);
+        if (Contains(attempted))
+        {
+            return (attempted, wrappedDirection);
+        }
+
+        var resolvedDirection = CountExceededAxes(attempted) >= 2
+            ? RotateDirection(wrappedDirection, 2)
+            : ReflectPlayerDirection(wrappedDirection, attempted);
+        var resolvedCoord = origin.Step(resolvedDirection);
+        if (!Contains(resolvedCoord))
+        {
+            throw new InvalidOperationException("Player border reflection resolved to an illegal cell.");
+        }
+
+        return (resolvedCoord, resolvedDirection);
+    }
+
     public bool TryGetDirection(HexCoord from, HexCoord to, out int direction)
     {
         var delta = to - from;
@@ -64,6 +85,68 @@ public sealed class HexGrid
 
         direction = 0;
         return false;
+    }
+
+    private int CountExceededAxes(HexCoord coord)
+    {
+        var exceededAxes = 0;
+        if (Math.Abs(coord.Q) > Radius)
+        {
+            exceededAxes++;
+        }
+
+        if (Math.Abs(coord.R) > Radius)
+        {
+            exceededAxes++;
+        }
+
+        if (Math.Abs(coord.S) > Radius)
+        {
+            exceededAxes++;
+        }
+
+        return exceededAxes;
+    }
+
+    private int ReflectPlayerDirection(int direction, HexCoord attempted)
+    {
+        if (Math.Abs(attempted.Q) > Radius)
+        {
+            return direction switch
+            {
+                1 => 5,
+                2 => 4,
+                4 => 2,
+                5 => 1,
+                _ => direction,
+            };
+        }
+
+        if (Math.Abs(attempted.R) > Radius)
+        {
+            return direction switch
+            {
+                0 => 4,
+                1 => 3,
+                3 => 1,
+                4 => 0,
+                _ => direction,
+            };
+        }
+
+        if (Math.Abs(attempted.S) > Radius)
+        {
+            return direction switch
+            {
+                0 => 2,
+                2 => 0,
+                3 => 5,
+                5 => 3,
+                _ => direction,
+            };
+        }
+
+        throw new InvalidOperationException("Cannot reflect a legal coordinate.");
     }
 
     public HashSet<HexCoord> CreateConnectedReefs(RandomNumberGenerator random, IReadOnlyCollection<HexCoord> reservedCells, int clusterCount, int clusterMinSize, int clusterMaxSize)

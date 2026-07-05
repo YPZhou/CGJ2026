@@ -148,6 +148,22 @@ public sealed class AnimationManager
         PlayNext(parent);
     }
 
+    public void SetPaused(bool paused)
+    {
+        if (_tween == null || !GodotObject.IsInstanceValid(_tween))
+        {
+            return;
+        }
+
+        if (paused)
+        {
+            _tween.Pause();
+            return;
+        }
+
+        _tween.Play();
+    }
+
     public void SkipAll()
     {
         KillTween();

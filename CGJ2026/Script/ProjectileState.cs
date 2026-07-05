@@ -6,13 +6,16 @@ public enum ProjectileOwner
 
 public sealed class ProjectileState
 {
-    public ProjectileState(HexCoord coord, int direction, int damage, ProjectileOwner owner, bool hasExplosive)
+    public ProjectileState(HexCoord coord, int direction, int damage, ProjectileOwner owner, bool hasExplosive,
+        float realtimeMoveIntervalSeconds = 0.0f)
     {
         Coord = coord;
         Direction = HexCoord.WrapDirection(direction);
         Damage = damage;
         Owner = owner;
         HasExplosive = hasExplosive;
+        RealtimeMoveIntervalSeconds = realtimeMoveIntervalSeconds;
+        RealtimeMoveCooldownSeconds = realtimeMoveIntervalSeconds;
     }
 
     public HexCoord Coord { get; set; }
@@ -24,4 +27,8 @@ public sealed class ProjectileState
     public ProjectileOwner Owner { get; }
 
     public bool HasExplosive { get; }
+
+    public float RealtimeMoveIntervalSeconds { get; }
+
+    public float RealtimeMoveCooldownSeconds { get; set; }
 }

@@ -26,20 +26,20 @@ public sealed class MoveCard
 
     public static readonly SubPoolEntry[] StraightPool =
     {
-        new("直航", 3, 2, 0),
-        new("紧急加速", 1, 3, 0),
+        new("直航", 3, 1, 0),
+        new("紧急加速", 1, 1, 0),
     };
 
     public static readonly SubPoolEntry[] LeftPool =
     {
-        new("左满舵", 4, 2, -1),
-        new("左漂移", 1, 3, -1),
+        new("左满舵", 4, 1, -1),
+        new("左漂移", 1, 1, -1),
     };
 
     public static readonly SubPoolEntry[] RightPool =
     {
-        new("右满舵", 4, 2, +1),
-        new("右漂移", 1, 3, +1),
+        new("右满舵", 4, 1, +1),
+        new("右漂移", 1, 1, +1),
     };
 
     public string Name { get; init; } = string.Empty;
@@ -56,17 +56,22 @@ public sealed class MoveCard
 
     public int TotalMove => BaseMove + MoveBonus;
 
+    public bool GrantsFireCadenceBoost => Name is "紧急加速" or "左漂移" or "右漂移";
+
     public string Summary
     {
         get
         {
-            if (TurnDelta == 0)
-            {
-                return $"移动 {TotalMove}";
-            }
+            var turnText = TurnDelta > 0
+                ? "右转"
+                : TurnDelta < 0
+                    ? "左转"
+                    : string.Empty;
+            var boostText = GrantsFireCadenceBoost ? "射速提升" : "加速";
 
-            var turnText = TurnDelta > 0 ? "右转" : "左转";
-            return $"{turnText}后移动 {TotalMove}";
+            return string.IsNullOrEmpty(turnText)
+                ? $"获得 3 秒{boostText}"
+                : $"{turnText}并获得 3 秒{boostText}";
         }
     }
 
