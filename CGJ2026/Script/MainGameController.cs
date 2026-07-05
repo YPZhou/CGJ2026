@@ -41,6 +41,7 @@ public partial class MainGameController : Node2D
     private const float HoverTooltipOffsetX = 18.0f;
     private const float HoverTooltipOffsetY = 14.0f;
     private const float HoverTooltipViewportMargin = 8.0f;
+    private const float CardCooldownSeconds = 1.5f;
     private const int PlayerFireBatchGroup = 1;
     private const int EnemyFireBatchGroup = 2;
 
@@ -59,8 +60,10 @@ public partial class MainGameController : Node2D
 
     private readonly RandomNumberGenerator _random = new();
     private readonly List<Button> _cardButtons = new();
+    private readonly List<ProgressBar> _cardCooldownBars = new();
     private readonly List<HexCoord> _drawOrderedCells = new();
-    private readonly List<MoveCard> _hand = new();
+    private readonly MoveCard?[] _hand = new MoveCard?[InitialHandSize];
+    private readonly float[] _cardCooldownRemainingSeconds = new float[InitialHandSize];
     private readonly List<EnemyState> _enemies = new();
     private readonly List<ProjectileState> _playerProjectiles = new();
     private readonly List<ProjectileState> _enemyProjectiles = new();
@@ -337,6 +340,22 @@ public partial class MainGameController : Node2D
         _cardButtons.Add(GetNode<Button>("HudLayer/HudMargin/HudVBox/CardsRow/CardButton0"));
         _cardButtons.Add(GetNode<Button>("HudLayer/HudMargin/HudVBox/CardsRow/CardButton1"));
         _cardButtons.Add(GetNode<Button>("HudLayer/HudMargin/HudVBox/CardsRow/CardButton2"));
+        _cardCooldownBars.Clear();
+        foreach (var button in _cardButtons)
+        {
+            var cooldownBar = new ProgressBar
+            {
+                ShowPercentage = false,
+                MinValue = 0.0,
+                MaxValue = CardCooldownSeconds,
+                Value = 0.0,
+                Visible = false,
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+            };
+            cooldownBar.SetAnchorsPreset(Control.LayoutPreset.BottomWide);
+            button.AddChild(cooldownBar);
+            _cardCooldownBars.Add(cooldownBar);
+        }
 
         _baseHudMargin = Mathf.Abs(_hudMargin.OffsetLeft);
         _baseHudSeparation = _hudVBox.GetThemeConstant("separation");
@@ -401,6 +420,8 @@ public partial class MainGameController : Node2D
         _mineFireElapsed = 0.0f;
         _waveTickElapsed = 0.0f;
         _playerBoostRemainingSeconds = 0.0f;
+        Array.Fill(_hand, null);
+        Array.Fill(_cardCooldownRemainingSeconds, 0.0f);
 
         _gameOverOverlay.Visible = false;
 
@@ -451,7 +472,6 @@ public partial class MainGameController : Node2D
         _playerProjectiles.Clear();
         _enemyProjectiles.Clear();
         _rewards.Clear();
-        _hand.Clear();
         _straightPoolUpgrades = 0;
         _leftPoolUpgrades = 0;
         _rightPoolUpgrades = 0;
@@ -720,21 +740,43 @@ public partial class MainGameController : Node2D
 
     private void FillHand()
     {
-        _hand.Clear();
-
-        var cards = new List<MoveCard>
+        for (var index = 0; index < InitialHandSize; index++)
         {
-            MoveCard.DrawFromPool(MoveCard.LeftPool, _leftPoolUpgrades, _random),
-            MoveCard.DrawFromPool(MoveCard.StraightPool, _straightPoolUpgrades, _random),
-            MoveCard.DrawFromPool(MoveCard.RightPool, _rightPoolUpgrades, _random),
-        };
+            _cardCooldownRemainingSeconds[index] = 0.0f;
+            DrawCardForSlot(index);
+        }
+    }
 
-        _hand.AddRange(cards);
+    private void FillHand(bool randomizeDirections)
+    {
+        for (var index = 0; index < InitialHandSize; index++)
+        {
+            _cardCooldownRemainingSeconds[index] = 0.0f;
+            _hand[index] = randomizeDirections
+                ? DrawCardForDirectionIndex(_random.RandiRange(0, 2))
+                : DrawCardForDirectionIndex(index);
+        }
+    }
+
+    private void DrawCardForSlot(int slotIndex)
+    {
+        _hand[slotIndex] = DrawCardForDirectionIndex(slotIndex);
+    }
+
+    private MoveCard DrawCardForDirectionIndex(int directionIndex)
+    {
+        return directionIndex switch
+        {
+            0 => MoveCard.DrawFromPool(MoveCard.LeftPool, _leftPoolUpgrades, _random),
+            1 => MoveCard.DrawFromPool(MoveCard.StraightPool, _straightPoolUpgrades, _random),
+            2 => MoveCard.DrawFromPool(MoveCard.RightPool, _rightPoolUpgrades, _random),
+            _ => throw new ArgumentOutOfRangeException(nameof(directionIndex)),
+        };
     }
 
     private void SelectCard(int index)
     {
-        if (_isGameOver || index < 0 || index >= _hand.Count)
+        if (_isGameOver || index < 0 || index >= _hand.Length || _hand[index] == null)
         {
             return;
         }
@@ -750,7 +792,7 @@ public partial class MainGameController : Node2D
 
     private void ApplyCardSelection(int index)
     {
-        if (_isGameOver || index < 0 || index >= _hand.Count)
+        if (_isGameOver || index < 0 || index >= _hand.Length || _hand[index] == null)
         {
             return;
         }
@@ -764,9 +806,15 @@ public partial class MainGameController : Node2D
             return;
         }
 
+        var card = _hand[index];
+        if (card == null)
+        {
+            return;
+        }
+
         _selectedCardIndex = index;
-        _selectedCard = _hand[index];
-        _preview = ResolveCardMovement(_fleet, _selectedCard, previewOnly: true);
+        _selectedCard = card;
+        _preview = ResolveCardMovement(_fleet, card, previewOnly: true);
         _isPreviewPaused = true;
 
         UpdateHudState();
@@ -775,13 +823,19 @@ public partial class MainGameController : Node2D
 
     private void OnConfirmPressed()
     {
-        if (_isGameOver || _inputLocked || _selectedCard == null || _selectedCardIndex < 0 || _selectedCardIndex >= _hand.Count)
+        if (_isGameOver || _inputLocked || _selectedCard == null || _selectedCardIndex < 0 || _selectedCardIndex >= _hand.Length)
         {
             return;
         }
 
         var activeCard = _hand[_selectedCardIndex];
-        _hand.RemoveAt(_selectedCardIndex);
+        if (activeCard == null)
+        {
+            return;
+        }
+
+        _hand[_selectedCardIndex] = null;
+        _cardCooldownRemainingSeconds[_selectedCardIndex] = CardCooldownSeconds;
 
         if (activeCard.TurnDelta != 0)
         {
@@ -790,11 +844,6 @@ public partial class MainGameController : Node2D
 
         ApplyPlayerSpeedBoost();
         _lastRewardEvent = $"已执行 {activeCard.Name}，获得 3 秒加速。";
-
-        if (_hand.Count == 0)
-        {
-            FillHand();
-        }
 
         ClearSelection();
         _isUserPaused = false;
@@ -849,6 +898,8 @@ public partial class MainGameController : Node2D
         {
             _playerBoostRemainingSeconds = Mathf.Max(0.0f, _playerBoostRemainingSeconds - deltaSeconds);
         }
+
+        AdvanceCardCooldowns(deltaSeconds);
 
         _playerMoveElapsed += deltaSeconds;
         _enemyMoveElapsed += deltaSeconds;
@@ -1819,7 +1870,6 @@ public partial class MainGameController : Node2D
         SpawnScheduledEnemiesForTurn(_turnCounter);
         TryAutoSpawnRewardForTurn(_turnCounter, rewardEvents);
 
-        FillHand();
         RefreshEnemyIntents();
     }
 
@@ -2080,8 +2130,7 @@ public partial class MainGameController : Node2D
 
                 break;
             case RewardType.CommandReload:
-                _hand.Clear();
-                FillHand();
+                FillHand(randomizeDirections: true);
                 rewardEvents.Add("拾取指令重载，当前手牌已重抽。");
                 break;
             case RewardType.FirepowerUpgrade:
@@ -3352,6 +3401,32 @@ public partial class MainGameController : Node2D
         _isPreviewPaused = false;
     }
 
+    private void AdvanceCardCooldowns(float deltaSeconds)
+    {
+        var cardUiChanged = false;
+
+        for (var index = 0; index < _hand.Length; index++)
+        {
+            if (_cardCooldownRemainingSeconds[index] <= 0.0f)
+            {
+                continue;
+            }
+
+            _cardCooldownRemainingSeconds[index] = Mathf.Max(0.0f, _cardCooldownRemainingSeconds[index] - deltaSeconds);
+            if (_cardCooldownRemainingSeconds[index] == 0.0f && _hand[index] == null)
+            {
+                DrawCardForSlot(index);
+            }
+
+            cardUiChanged = true;
+        }
+
+        if (cardUiChanged)
+        {
+            UpdateCardButtons();
+        }
+    }
+
     private void UnlockInputAndFlushBufferedSelection()
     {
         _skipRemainingTurnAnimations = false;
@@ -3359,7 +3434,7 @@ public partial class MainGameController : Node2D
 
         var pendingIndex = _pendingCardSelectionIndex;
         _pendingCardSelectionIndex = -1;
-        if (!_isGameOver && pendingIndex >= 0 && pendingIndex < _hand.Count)
+        if (!_isGameOver && pendingIndex >= 0 && pendingIndex < _hand.Length)
         {
             ApplyCardSelection(pendingIndex);
             return;
@@ -3618,25 +3693,28 @@ public partial class MainGameController : Node2D
         for (var index = 0; index < _cardButtons.Count; index++)
         {
             var button = _cardButtons[index];
-            if (index >= _hand.Count)
-            {
-                button.Visible = false;
-                continue;
-            }
-
             var card = _hand[index];
+            var cooldownBar = _cardCooldownBars[index];
+            var isCoolingDown = _cardCooldownRemainingSeconds[index] > 0.0f;
+
             button.Visible = true;
-            button.Disabled = _isGameOver;
-            button.Icon = card.TurnDelta switch
+            button.Disabled = _isGameOver || card == null;
+            button.Icon = card switch
             {
-                0 => _forwardInstructionTexture,
-                < 0 => _leftTurnInstructionTexture,
+                null => null,
+                _ when card.TurnDelta == 0 => _forwardInstructionTexture,
+                _ when card.TurnDelta < 0 => _leftTurnInstructionTexture,
                 _ => _rightTurnInstructionTexture,
             };
-            button.Text = BuildCardLabel(card, isSelected: index == _selectedCardIndex);
-            button.Modulate = index == _selectedCardIndex
+            button.Text = card == null
+                ? string.Empty
+                : BuildCardLabel(card, isSelected: index == _selectedCardIndex);
+            button.Modulate = index == _selectedCardIndex && card != null
                 ? new Color(1.0f, 0.92f, 0.75f, 1.0f)
                 : Colors.White;
+
+            cooldownBar.Visible = isCoolingDown;
+            cooldownBar.Value = _cardCooldownRemainingSeconds[index];
         }
     }
 
@@ -3678,13 +3756,22 @@ public partial class MainGameController : Node2D
         var cardHeight = Mathf.Max(36.0f, _baseCardButtonSize.Y * _uiScale);
         var cardFontSize = Mathf.Max(10, Mathf.RoundToInt(_baseCardFontSize * _uiScale));
         var cardIconWidth = Mathf.Max(12, Mathf.RoundToInt(cardHeight * 0.42f));
+        var cooldownBarHeight = Mathf.Max(4.0f, cardHeight * 0.1f);
+        var cooldownBarInset = Mathf.Max(4.0f, cardHeight * 0.08f);
 
-        foreach (var button in _cardButtons)
+        for (var index = 0; index < _cardButtons.Count; index++)
         {
+            var button = _cardButtons[index];
             button.CustomMinimumSize = new Vector2(cardWidth, cardHeight);
             button.AddThemeFontSizeOverride("font_size", cardFontSize);
             button.AddThemeConstantOverride("icon_max_width", cardIconWidth);
             button.ExpandIcon = true;
+
+            var cooldownBar = _cardCooldownBars[index];
+            cooldownBar.OffsetLeft = cooldownBarInset;
+            cooldownBar.OffsetTop = -(cooldownBarInset + cooldownBarHeight);
+            cooldownBar.OffsetRight = -cooldownBarInset;
+            cooldownBar.OffsetBottom = -cooldownBarInset;
         }
 
         _statusLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseStatusFontSize * _uiScale)));
