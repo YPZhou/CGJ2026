@@ -5,6 +5,9 @@
 [node name="Node2D" type="Node2D" unique_id=146032470]
 script = ExtResource("1_7u6d5")
 
+[node name="BoardCamera" type="Camera2D" parent="."]
+enabled = true
+
 [node name="HudLayer" type="CanvasLayer" parent="." unique_id=1060312436]
 
 [node name="HoverTooltip" type="PanelContainer" parent="HudLayer" unique_id=1217937109]
@@ -27,35 +30,43 @@ offset_right = -16.0
 offset_bottom = -16.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 
 [node name="HudVBox" type="VBoxContainer" parent="HudLayer/HudMargin" unique_id=449055617]
 layout_mode = 2
 theme_override_constants/separation = 12
+mouse_filter = 2
 
 [node name="StatusLabel" type="Label" parent="HudLayer/HudMargin/HudVBox" unique_id=961339991]
 layout_mode = 2
 text = "Initializing map and fleet demo..."
+mouse_filter = 2
 
 [node name="HintLabel" type="Label" parent="HudLayer/HudMargin/HudVBox" unique_id=1692482996]
 layout_mode = 2
 text = "Map + Fleet core demo"
+mouse_filter = 2
 
 [node name="CombatLabel" type="Label" parent="HudLayer/HudMargin/HudVBox" unique_id=1951003707]
 layout_mode = 2
 text = "敌舰 0  敌弹 0  己弹 0"
+mouse_filter = 2
 
 [node name="RewardLabel" type="Label" parent="HudLayer/HudMargin/HudVBox" unique_id=391127671]
 layout_mode = 2
 text = "奖励 0/3  池 +0/0/0"
+mouse_filter = 2
 
 [node name="HudSpacer" type="Control" parent="HudLayer/HudMargin/HudVBox" unique_id=1555801485]
 layout_mode = 2
 size_flags_vertical = 3
+mouse_filter = 2
 
 [node name="CardsRow" type="HBoxContainer" parent="HudLayer/HudMargin/HudVBox" unique_id=2010507789]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 12
+mouse_filter = 2
 
 [node name="CardButton0" type="Button" parent="HudLayer/HudMargin/HudVBox/CardsRow" unique_id=418514174]
 custom_minimum_size = Vector2(220, 84)
@@ -79,6 +90,17 @@ text = "Card 3"
 custom_minimum_size = Vector2(220, 52)
 layout_mode = 2
 text = "确认移动"
+
+[node name="PauseButton" type="Button" parent="HudLayer"]
+custom_minimum_size = Vector2(152, 52)
+layout_mode = 0
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -168.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = 68.0
+text = "暂停"
 
 [node name="GameOverOverlay" type="ColorRect" parent="HudLayer" unique_id=775715130]
 visible = false

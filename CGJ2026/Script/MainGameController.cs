@@ -32,6 +32,7 @@ public partial class MainGameController : Node2D
     private const float BoardMargin = 36.0f;
     private const float BoardTopInset = 96.0f;
     private const float BoardBottomInset = 220.0f;
+    private const float BoardScaleMultiplier = 2.0f;
     private const float MinimumUiScale = 0.35f;
     private const float MaximumUiScale = 1.5f;
     private const float MinimumHexSize = 4.0f;
@@ -83,6 +84,7 @@ public partial class MainGameController : Node2D
     private bool _isGameOver;
     private bool _isVictory;
     private bool _isPreviewPaused;
+    private bool _isUserPaused;
     private string _gameOverReason = string.Empty;
     private string _lastCombatEvent = string.Empty;
     private string _lastRewardEvent = string.Empty;
@@ -91,6 +93,7 @@ public partial class MainGameController : Node2D
     private int _leftPoolUpgrades;
     private int _rightPoolUpgrades;
     private float _hexSize = 16.0f;
+    private Vector2 _cameraPanOffset;
     private Vector2 _boardOrigin;
     private Vector2 _baseBoundsMin;
     private Vector2 _baseBoundsMax;
@@ -115,11 +118,13 @@ public partial class MainGameController : Node2D
     private PanelContainer _hoverTooltip = null!;
     private Label _hoverTooltipLabel = null!;
     private Button _confirmButton = null!;
+    private Button _pauseButton = null!;
     private float _baseHudMargin;
     private int _baseHudSeparation;
     private int _baseCardsRowSeparation;
     private Vector2 _baseCardButtonSize;
     private Vector2 _baseConfirmButtonSize;
+    private Vector2 _basePauseButtonSize;
     private int _baseStatusFontSize;
     private int _baseHintFontSize;
     private int _baseCombatFontSize;
@@ -135,9 +140,12 @@ public partial class MainGameController : Node2D
     private int _baseGameOverStatsFontSize;
     private int _baseCardFontSize;
     private int _baseConfirmFontSize;
+    private int _basePauseFontSize;
     private AnimationManager _animManager = null!;
     private EntityDisplayCoordinator _coordinator = null!;
+    private Camera2D _boardCamera = null!;
     private bool _inputLocked;
+    private bool _isDraggingCamera;
     private PendingTurnState? _activeTurn;
     private Action? _afterAnimationBatch;
     private int _animationBatchSequence;
@@ -152,6 +160,7 @@ public partial class MainGameController : Node2D
         _commandReloadTexture = GD.Load<Texture2D>("res://Art/BonusRefreshInstruction.png");
         _firepowerUpgradeTexture = GD.Load<Texture2D>("res://Art/BonusPowerUp.png");
         _cardCalibrationTexture = GD.Load<Texture2D>("res://Art/BonusBoostInstruction.png");
+        _boardCamera = GetNode<Camera2D>("BoardCamera");
         ResolveHudNodes();
         HookHudEvents();
 
@@ -176,10 +185,39 @@ public partial class MainGameController : Node2D
 
     public override void _Input(InputEvent @event)
     {
+        if (_isDraggingCamera)
+        {
+            if (@event is InputEventMouseMotion mouseMotion)
+            {
+                _cameraPanOffset -= mouseMotion.Relative;
+                RefreshCameraPosition();
+                return;
+            }
+
+            if (@event is InputEventMouseButton mouseButton && mouseButton.ButtonIndex == MouseButton.Left && !mouseButton.Pressed)
+            {
+                _isDraggingCamera = false;
+                return;
+            }
+        }
+
         if (_inputLocked && @event is InputEventKey keyEvent && keyEvent.Pressed && keyEvent.Keycode is Key.Space or Key.Enter)
         {
             _skipRemainingTurnAnimations = true;
             _animManager.SkipAll();
+        }
+    }
+
+    public override void _UnhandledInput(InputEvent @event)
+    {
+        if (_isGameOver)
+        {
+            return;
+        }
+
+        if (@event is InputEventMouseButton mouseButton && mouseButton.ButtonIndex == MouseButton.Left && mouseButton.Pressed)
+        {
+            _isDraggingCamera = true;
         }
     }
 
@@ -192,7 +230,12 @@ public partial class MainGameController : Node2D
 
         if (_inputLocked)
         {
-            _animManager.Update((float)delta);
+            if (!_isUserPaused)
+            {
+                _animManager.Update((float)delta);
+            }
+
+            UpdateHoverTooltip(GetLocalMousePosition(), GetViewport().GetMousePosition());
             return;
         }
 
@@ -201,7 +244,7 @@ public partial class MainGameController : Node2D
             return;
         }
 
-        if (!_isPreviewPaused)
+        if (!IsGamePaused)
         {
             AccumulateRealtime((float)delta);
             TryRunNextRealtimeAction();
@@ -254,6 +297,7 @@ public partial class MainGameController : Node2D
         _hoverTooltip = GetNode<PanelContainer>("HudLayer/HoverTooltip");
         _hoverTooltipLabel = GetNode<Label>("HudLayer/HoverTooltip/HoverTooltipLabel");
         _confirmButton = GetNode<Button>("HudLayer/HudMargin/HudVBox/ConfirmButton");
+        _pauseButton = GetNode<Button>("HudLayer/PauseButton");
 
         _cardButtons.Clear();
         _cardButtons.Add(GetNode<Button>("HudLayer/HudMargin/HudVBox/CardsRow/CardButton0"));
@@ -265,6 +309,7 @@ public partial class MainGameController : Node2D
         _baseCardsRowSeparation = _cardsRow.GetThemeConstant("separation");
         _baseCardButtonSize = _cardButtons[0].CustomMinimumSize;
         _baseConfirmButtonSize = _confirmButton.CustomMinimumSize;
+        _basePauseButtonSize = _pauseButton.CustomMinimumSize;
         _baseStatusFontSize = _statusLabel.GetThemeFontSize("font_size");
         _baseHintFontSize = _hintLabel.GetThemeFontSize("font_size");
         _baseCombatFontSize = _combatLabel.GetThemeFontSize("font_size");
@@ -272,6 +317,7 @@ public partial class MainGameController : Node2D
         _baseHoverTooltipFontSize = _hoverTooltipLabel.GetThemeFontSize("font_size");
         _baseCardFontSize = _cardButtons[0].GetThemeFontSize("font_size");
         _baseConfirmFontSize = _confirmButton.GetThemeFontSize("font_size");
+        _basePauseFontSize = _pauseButton.GetThemeFontSize("font_size");
 
         _gameOverOverlay = GetNode<ColorRect>("HudLayer/GameOverOverlay");
         _gameOverTitleLabel = GetNode<Label>("HudLayer/GameOverOverlay/GameOverPanel/GameOverVBox/GameOverTitleLabel");
@@ -293,6 +339,7 @@ public partial class MainGameController : Node2D
         }
 
         _confirmButton.Pressed += OnConfirmPressed;
+        _pauseButton.Pressed += OnPauseButtonPressed;
         _gameOverRestartButton.Pressed += StartNewDemo;
     }
 
@@ -304,6 +351,9 @@ public partial class MainGameController : Node2D
         _afterAnimationBatch = null;
         _skipRemainingTurnAnimations = false;
         _isPreviewPaused = false;
+        _isUserPaused = false;
+        _isDraggingCamera = false;
+        _cameraPanOffset = Vector2.Zero;
         _pendingCardSelectionIndex = -1;
         _pendingPlayerProjectiles.Clear();
         _pendingEnemyProjectiles.Clear();
@@ -636,6 +686,7 @@ public partial class MainGameController : Node2D
         if (_selectedCardIndex == index)
         {
             ClearSelection();
+            _isUserPaused = false;
             UpdateHudState();
             QueueRedraw();
             return;
@@ -679,9 +730,40 @@ public partial class MainGameController : Node2D
         QueueRedraw();
     }
 
+    private void OnPauseButtonPressed()
+    {
+        if (_isGameOver)
+        {
+            return;
+        }
+
+        var clearedPreview = false;
+        if (IsGamePaused)
+        {
+            _isUserPaused = false;
+            if (_isPreviewPaused)
+            {
+                ClearSelection();
+                clearedPreview = true;
+            }
+        }
+        else
+        {
+            _isUserPaused = true;
+        }
+
+        UpdateHudState();
+        if (clearedPreview)
+        {
+            QueueRedraw();
+        }
+    }
+
     private float CurrentPlayerMoveIntervalSeconds => _playerBoostRemainingSeconds > 0.0f
         ? PlayerBoostMoveIntervalSeconds
         : PlayerMoveIntervalSeconds;
+
+    private bool IsGamePaused => _isPreviewPaused || _isUserPaused;
 
     private void ApplyPlayerSpeedBoost()
     {
@@ -707,7 +789,7 @@ public partial class MainGameController : Node2D
 
     private void TryRunNextRealtimeAction()
     {
-        while (!_inputLocked && !_isPreviewPaused && !_isGameOver)
+        while (!_inputLocked && !IsGamePaused && !_isGameOver)
         {
             if (_playerProjectileElapsed >= PlayerProjectileIntervalSeconds)
             {
@@ -3158,6 +3240,8 @@ public partial class MainGameController : Node2D
         UpdateRewardLabel();
         UpdateCardButtons();
         _confirmButton.Disabled = _isGameOver || _selectedCard == null;
+        _pauseButton.Text = IsGamePaused ? "继续" : "暂停";
+        _pauseButton.Disabled = _isGameOver;
 
         if (_isGameOver && !_gameOverOverlay.Visible)
         {
@@ -3191,7 +3275,25 @@ public partial class MainGameController : Node2D
 
     private void UpdateHintLabel()
     {
-        _hintLabel.Text = "敌军会显示移动或开火意图。选择指令时游戏会暂停，确认后恢复。";
+        if (_isGameOver)
+        {
+            _hintLabel.Text = "点击重新开始以生成新的战局。";
+            return;
+        }
+
+        if (_isPreviewPaused)
+        {
+            _hintLabel.Text = "游戏已暂停。按住左键可拖动画面，点右上角继续会取消当前指令预览。";
+            return;
+        }
+
+        if (_isUserPaused)
+        {
+            _hintLabel.Text = "游戏已暂停。按住左键可拖动画面，点右上角继续。";
+            return;
+        }
+
+        _hintLabel.Text = "按住左键可拖动画面。敌军会显示移动或开火意图，选择指令时游戏会暂停。";
     }
 
     private void UpdateHoverTooltip(Vector2 localMousePosition, Vector2 screenMousePosition)
@@ -3445,11 +3547,21 @@ public partial class MainGameController : Node2D
         _confirmButton.CustomMinimumSize = new Vector2(confirmWidth, confirmHeight);
         _confirmButton.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_baseConfirmFontSize * _uiScale)));
 
+        var pauseWidth = Mathf.Min(_basePauseButtonSize.X * _uiScale, viewportSize.X * 0.28f);
+        var pauseHeight = Mathf.Max(32.0f, _basePauseButtonSize.Y * _uiScale);
+        _pauseButton.CustomMinimumSize = new Vector2(pauseWidth, pauseHeight);
+        _pauseButton.AddThemeFontSizeOverride("font_size", Mathf.Max(10, Mathf.RoundToInt(_basePauseFontSize * _uiScale)));
+        _pauseButton.OffsetLeft = -hudMargin - pauseWidth;
+        _pauseButton.OffsetTop = hudMargin;
+        _pauseButton.OffsetRight = -hudMargin;
+        _pauseButton.OffsetBottom = hudMargin + pauseHeight;
+
         _gameOverTitleLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(18, Mathf.RoundToInt(_baseGameOverTitleFontSize * _uiScale * 2.0f)));
         _gameOverReasonLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseGameOverReasonFontSize * _uiScale)));
         _gameOverStatsLabel.AddThemeFontSizeOverride("font_size", Mathf.Max(12, Mathf.RoundToInt(_baseGameOverStatsFontSize * _uiScale)));
 
         RecalculateBoardLayout();
+        RefreshCameraPosition();
     }
 
     private void RecalculateBoardLayout()
@@ -3469,10 +3581,16 @@ public partial class MainGameController : Node2D
         var unitHeight = (_baseBoundsMax.Y - _baseBoundsMin.Y) + 2.0f;
         var sizeX = availableRect.Size.X / unitWidth;
         var sizeY = availableRect.Size.Y / unitHeight;
-        _hexSize = Mathf.Clamp(Mathf.Min(sizeX, sizeY), MinimumHexSize, MaximumHexSize);
+        var fittedHexSize = Mathf.Min(sizeX, sizeY);
+        _hexSize = Mathf.Clamp(fittedHexSize * BoardScaleMultiplier, MinimumHexSize, MaximumHexSize * BoardScaleMultiplier);
 
         var baseCenter = (_baseBoundsMin + _baseBoundsMax) * 0.5f;
         _boardOrigin = availableRect.Position + (availableRect.Size * 0.5f) - (baseCenter * _hexSize);
+    }
+
+    private void RefreshCameraPosition()
+    {
+        _boardCamera.Position = (GetViewportRect().Size * 0.5f) + _cameraPanOffset;
     }
 
     private void OnViewportSizeChanged()
@@ -3786,7 +3904,7 @@ public partial class MainGameController : Node2D
         if (ThemeDB.FallbackFont != null)
         {
             DrawString(ThemeDB.FallbackFont, effect.Position + new Vector2(0, offsetY), effect.FloatingText,
-                HorizontalAlignment.Center, -1, Mathf.Max(10, Mathf.RoundToInt(_baseCardFontSize * _uiScale)),
+                HorizontalAlignment.Center, -1, Mathf.Max(10, Mathf.RoundToInt(_hexSize * 0.95f)),
                 new Color(0.98f, 0.86f, 0.32f, alpha));
         }
     }
